@@ -16,6 +16,12 @@ allowed_domains:
   - "www.domusweb.it"
   - "architecturalrecord.com"
   - "www.architecturalrecord.com"
+  - "architecturaldigest.in"
+  - "www.architecturaldigest.in"
+  - "designpataki.com"
+  - "www.designpataki.com"
+  - "thinkmatter.in"
+  - "www.thinkmatter.in"
   - "divisare.com"
   - "materialdistrict.com"
   - "transmaterial.net"
@@ -33,6 +39,27 @@ sources:
     category_hint: "ARCHITECTURE"
     feed_url: "https://www.dezeen.com/feed/"
     homepage: "https://www.dezeen.com"
+    enabled: true
+
+  - id: "ad_india"
+    name: "Architectural Digest India"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://www.architecturaldigest.in/feed/rss"
+    homepage: "https://www.architecturaldigest.in"
+    enabled: true
+
+  - id: "thinkmatter_india"
+    name: "Matter Architecture"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://thinkmatter.in/feed/"
+    homepage: "https://thinkmatter.in"
+    enabled: true
+
+  - id: "design_pataki"
+    name: "Design Pataki"
+    category_hint: "INTERIORS"
+    feed_url: "https://designpataki.com/feed/"
+    homepage: "https://designpataki.com"
     enabled: true
 
   - id: "dezeen_interiors"
