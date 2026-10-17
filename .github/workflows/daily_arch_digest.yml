@@ -38,15 +38,15 @@ jobs:
         run: |
           python main.py --max-per-source 3
 
-      - name: Commit and Push Daily Report
+      - name: Commit and Push Daily Report & Vercel Seed Database
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add reports/
+          git add reports/ data/seed_case_studies.json
           # Only commit if changes exist
           if git diff --staged --quiet; then
-            echo "No new changes or reports to commit."
+            echo "No new reports or seed database changes to commit."
           else
-            git commit -m "chore(digest): automated daily architectural brief [skip ci]"
+            git commit -m "chore(digest): automated daily architectural brief and Vercel seed sync"
             git push
           fi

@@ -122,7 +122,6 @@ class CaseStudyDatabase:
 
                 # Auto-seed from data/seed_case_studies.json if database is empty (e.g. freshly booted on Vercel)
                 try:
-
                     count = conn.execute("SELECT COUNT(*) FROM case_studies").fetchone()[0]
                     if count == 0:
                         seed_path = Path(__file__).resolve().parent.parent / "data" / "seed_case_studies.json"
@@ -136,7 +135,8 @@ class CaseStudyDatabase:
                                         architect_or_manufacturer, project_typology, climate_or_location,
                                         materials_used, bullet_1, bullet_2, bullet_3, document_text, embedding, is_bookmarked
                                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """, (
+                                Beweisen
+                                """.replace("Beweisen", ""), (
                                     row.get("id"), row.get("url"), row.get("title"), row.get("source_name"),
                                     row.get("publish_date"), row.get("category"), row.get("architect_or_manufacturer"),
                                     row.get("project_typology"), row.get("climate_or_location"), row.get("materials_used"),
@@ -151,8 +151,6 @@ class CaseStudyDatabase:
                 conn.commit()
         except Exception as e:
             logger.warning(f"Could not initialize or migrate schema (might be read-only): {e}")
-
-
 
     def _get_embedding(self, text: str) -> List[float]:
         """
@@ -395,3 +393,79 @@ CONTENT:
         except Exception as e:
             logger.warning(f"Error fetching recent articles: {e}")
             return []
+
+    def get_articles_by_ids(self, article_ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Retrieves case study records matching any of the provided IDs or URLs.
+        Preserves the input ordering.
+        """
+        if not article_ids:
+            return []
+
+        clean_ids = [str(aid).strip() for aid in article_ids if str(aid).strip()]
+        if not clean_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in clean_ids)
+        sql = f"""
+            SELECT id, url, title, source_name, publish_date, category,
+                   architect_or_manufacturer, project_typology, climate_or_location,
+                   materials_used, bullet_1, bullet_2, bullet_3, is_bookmarked
+            FROM case_studies
+            WHERE id IN ({placeholders}) OR url IN ({placeholders})
+        """
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(sql, clean_ids + clean_ids).fetchall()
+                items = [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(f"Error fetching articles by IDs: {e}")
+            return []
+
+        # Order by input IDs
+        id_map = {item["id"]: item for item in items}
+        url_map = {item["url"]: item for item in items}
+        ordered = []
+        seen = set()
+        for aid in clean_ids:
+            match = id_map.get(aid) or url_map.get(aid)
+            if match and match["id"] not in seen:
+                ordered.append(match)
+                seen.add(match["id"])
+        return ordered
+
+    def export_seed_json(self, output_path: Optional[Path] = None) -> int:
+        """
+        Exports all indexed case studies from SQLite into data/seed_case_studies.json.
+        Enables seamless persistence on serverless platforms (Vercel) by bundling
+        the latest scraped architectural precedents with the repository.
+        """
+        target = output_path or (Path(__file__).resolve().parent.parent / "data" / "seed_case_studies.json")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            sql = """
+                SELECT id, url, title, source_name, publish_date, category,
+                       architect_or_manufacturer, project_typology, climate_or_location,
+                       materials_used, bullet_1, bullet_2, bullet_3, document_text,
+                       embedding, is_bookmarked
+                FROM case_studies
+                ORDER BY rowid DESC
+            """
+            with self._get_connection() as conn:
+                rows = conn.execute(sql).fetchall()
+                data = []
+                for r in rows:
+                    item = dict(r)
+                    doc_txt = item.get("document_text") or item.get("title", "")
+                    compact_vec = self._offline_vectorize(doc_txt, dim=128)
+                    item["embedding"] = json.dumps([round(float(x), 4) for x in compact_vec])
+                    data.append(item)
+
+            with open(target, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+
+            logger.info(f"Exported {len(data)} precedents to seed JSON at {target}")
+            return len(data)
+        except Exception as e:
+            logger.error(f"Failed to export seed JSON to {target}: {e}")
+            return 0

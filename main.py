@@ -97,6 +97,16 @@ def run_pipeline(max_per_source: int = 3, skip_indexing: bool = False):
     report_file = builder.generate_digest(triaged_items, run_date=start_time)
     logger.info(f"Daily Digest generated successfully at: {report_file}")
 
+    # 5. Cloud Persistence Seed Export Phase
+    if not skip_indexing:
+        logger.info("PHASE 5: Exporting updated precedents to data/seed_case_studies.json...")
+        try:
+            db = CaseStudyDatabase()
+            seed_count = db.export_seed_json()
+            logger.info(f"Successfully exported {seed_count} precedents to data/seed_case_studies.json for Vercel auto-sync.")
+        except Exception as e:
+            logger.warning(f"Could not export seed JSON: {e}")
+
     elapsed = (datetime.now() - start_time).total_seconds()
     print("\n" + "=" * 70)
     print("✨ Pipeline Complete!")

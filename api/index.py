@@ -92,8 +92,9 @@ class SearchRequest(BaseModel):
 
 
 class DossierRequest(BaseModel):
-    brief: str
+    brief: Optional[str] = "Synthesis of Shortlisted Architectural Precedents"
     top_k: Optional[int] = 5
+    article_ids: Optional[List[str]] = None
 
 
 class BookmarkRequest(BaseModel):
@@ -156,14 +157,17 @@ def search_precedents(req: SearchRequest):
 def generate_dossier_download(req: DossierRequest):
     """
     Synthesizes a structured Case Study Dossier and streams the .docx file directly to browser.
+    Can be generated from a design brief OR from explicitly shortlisted article_ids.
     """
-    if not req.brief or len(req.brief.strip()) < 5:
-        raise HTTPException(status_code=400, detail="Project design brief is required.")
+    brief = (req.brief or "").strip()
+    if not req.article_ids and len(brief) < 5:
+        raise HTTPException(status_code=400, detail="Project design brief or shortlisted article IDs required.")
 
     dossier_gen = get_dossier_gen()
     result = dossier_gen.generate_dossier(
-        project_brief=req.brief.strip(),
-        top_k=req.top_k or 5
+        project_brief=brief or "Curated Architectural Precedent Review",
+        top_k=req.top_k or 5,
+        article_ids=req.article_ids
     )
 
     if not result.get("success"):
@@ -195,14 +199,17 @@ def generate_dossier_download(req: DossierRequest):
 def generate_dossier_preview(req: DossierRequest):
     """
     Synthesizes the dossier and returns the Markdown text & precedent metadata for in-browser preview.
+    Supports either a design brief or shortlisted article_ids.
     """
-    if not req.brief or len(req.brief.strip()) < 5:
-        raise HTTPException(status_code=400, detail="Project design brief is required.")
+    brief = (req.brief or "").strip()
+    if not req.article_ids and len(brief) < 5:
+        raise HTTPException(status_code=400, detail="Project design brief or shortlisted article IDs required.")
 
     dossier_gen = get_dossier_gen()
     result = dossier_gen.generate_dossier(
-        project_brief=req.brief.strip(),
-        top_k=req.top_k or 5
+        project_brief=brief or "Curated Architectural Precedent Review",
+        top_k=req.top_k or 5,
+        article_ids=req.article_ids
     )
 
     if not result.get("success"):
@@ -210,7 +217,7 @@ def generate_dossier_preview(req: DossierRequest):
 
     return {
         "success": True,
-        "brief": req.brief,
+        "brief": result.get("project_brief", req.brief),
         "markdown": result.get("synthesis_markdown", ""),
         "filename": result.get("docx_filename", "dossier.docx"),
         "precedents": result.get("precedents", [])
@@ -283,6 +290,12 @@ def trigger_ingest(
                 report_name = report_path.name
         except Exception as e:
             logger.warning(f"Digest generation skipped: {e}")
+
+        # Auto-export seed JSON for cloud persistence
+        try:
+            db.export_seed_json()
+        except Exception as e:
+            logger.warning(f"Seed JSON export skipped: {e}")
 
         return {
             "status": "success",
@@ -387,6 +400,10 @@ def index_html():
         <span class="px-3 py-1 rounded-md bg-slate-800 border border-slate-700 text-xs font-mono text-cyan-400" id="db-counter">
           {total_count} Precedents
         </span>
+        <button onclick="switchTab('tab-shortlist')" class="px-3 py-1 rounded-md bg-amber-950/60 border border-amber-700/60 text-xs font-mono text-amber-300 hover:bg-amber-900/60 transition flex items-center space-x-1">
+          <span>⭐ Shortlist</span>
+          <span id="header-shortlist-count" class="ml-1 px-1.5 py-0.2 rounded-full bg-amber-500/20 text-[10px]">0</span>
+        </button>
         <button onclick="triggerIngest()" id="btn-ingest" class="px-3 py-1.5 rounded-md bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-600 hover:to-indigo-600 text-xs font-medium text-white transition flex items-center space-x-1 shadow-sm">
           <span>⚡ Sync Feeds</span>
         </button>
@@ -416,14 +433,18 @@ def index_html():
 
   <!-- Main Tabs Navigation -->
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full">
-    <div class="flex border-b border-slate-800 space-x-8 mb-8 text-sm font-medium">
-      <button onclick="switchTab('tab-finder')" id="nav-finder" class="tab-btn pb-3 border-b-2 border-cyan-400 text-cyan-400 flex items-center space-x-2">
+    <div class="flex border-b border-slate-800 space-x-6 mb-8 text-sm font-medium overflow-x-auto">
+      <button onclick="switchTab('tab-finder')" id="nav-finder" class="tab-btn pb-3 border-b-2 border-cyan-400 text-cyan-400 flex items-center space-x-2 whitespace-nowrap">
         <span>🔍 Future Project Case Study Engine</span>
       </button>
-      <button onclick="switchTab('tab-intelligence')" id="nav-intelligence" class="tab-btn pb-3 border-b-2 border-transparent text-slate-400 hover:text-white flex items-center space-x-2">
+      <button onclick="switchTab('tab-intelligence')" id="nav-intelligence" class="tab-btn pb-3 border-b-2 border-transparent text-slate-400 hover:text-white flex items-center space-x-2 whitespace-nowrap">
         <span>📰 3-Part Daily Intelligence</span>
       </button>
-      <button onclick="switchTab('tab-dossier')" id="nav-dossier" class="tab-btn pb-3 border-b-2 border-transparent text-slate-400 hover:text-white flex items-center space-x-2">
+      <button onclick="switchTab('tab-shortlist')" id="nav-shortlist" class="tab-btn pb-3 border-b-2 border-transparent text-slate-400 hover:text-white flex items-center space-x-2 whitespace-nowrap">
+        <span>⭐ Studio Shortlist Board</span>
+        <span id="tab-shortlist-badge" class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono text-[11px] border border-amber-500/30">0</span>
+      </button>
+      <button onclick="switchTab('tab-dossier')" id="nav-dossier" class="tab-btn pb-3 border-b-2 border-transparent text-slate-400 hover:text-white flex items-center space-x-2 whitespace-nowrap">
         <span>📄 Client Word (.docx) Dossier Synthesizer</span>
       </button>
     </div>
@@ -520,7 +541,54 @@ def index_html():
       </div>
     </div>
 
-    <!-- TAB 3: Client Word (.docx) Dossier Synthesizer -->
+    <!-- TAB 3: Studio Shortlist Board -->
+    <div id="tab-shortlist" class="tab-content hidden">
+      <div class="glass-card rounded-xl p-6 mb-8 border border-slate-800 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 class="editorial-title text-2xl font-bold text-white flex items-center space-x-2">
+            <span>⭐ Curated Studio Shortlist Board</span>
+          </h2>
+          <p class="text-xs text-slate-400 mt-1 max-w-xl">
+            Precedents pinned to this board are persisted in your browser (<code class="text-cyan-400">localStorage</code>) and synced to the database. 
+            Synthesize an executive client document comparing these specific selected precedents in one click.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <button onclick="downloadShortlistDossier()" id="btn-download-shortlist-dossier" class="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-slate-950 font-bold rounded-lg text-xs shadow-lg transition flex items-center space-x-1.5">
+            <span>📥 Generate Word (.docx) Dossier from My Shortlist</span>
+            <span id="shortlist-btn-count" class="px-1.5 py-0.5 rounded bg-black/20 text-[10px]">0 Selected</span>
+          </button>
+          <button onclick="previewShortlistDossier()" id="btn-preview-shortlist" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition">
+            <span>👁️ Preview</span>
+          </button>
+          <button onclick="clearShortlist()" class="px-3 py-2 bg-slate-900 hover:bg-red-950/60 hover:text-red-400 text-slate-500 rounded-lg text-xs transition border border-slate-800">
+            <span>Clear Board</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Shortlist Preview Container -->
+      <div id="shortlist-preview-box" class="hidden mb-8 p-5 glass-card rounded-xl border border-slate-700">
+        <div class="flex items-center justify-between mb-3">
+          <h4 class="text-xs font-semibold uppercase tracking-wider text-amber-400">Synthesized Shortlist Dossier Preview</h4>
+          <button onclick="document.getElementById('shortlist-preview-box').classList.add('hidden')" class="text-slate-500 hover:text-white text-xs">✕ Close</button>
+        </div>
+        <div id="shortlist-preview-markdown" class="p-4 rounded-lg bg-slate-900/90 border border-slate-800 text-xs text-slate-300 font-mono whitespace-pre-wrap max-h-96 overflow-y-auto leading-relaxed">
+        </div>
+      </div>
+
+      <!-- Shortlist Grid -->
+      <div id="shortlist-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <!-- Rendered dynamically -->
+      </div>
+      <div id="shortlist-empty" class="text-center py-20 text-slate-500 text-sm">
+        <div class="text-3xl mb-2">⭐</div>
+        <p class="font-medium text-slate-400">No precedents shortlisted yet.</p>
+        <p class="text-xs text-slate-600 mt-1">Browse the Case Study Engine or Daily Intelligence Feed and click "☆ Shortlist" on any project to pin it here.</p>
+      </div>
+    </div>
+
+    <!-- TAB 4: Client Word (.docx) Dossier Synthesizer -->
     <div id="tab-dossier" class="tab-content hidden">
       <div class="glass-card rounded-xl p-6 border border-slate-800 max-w-3xl mx-auto shadow-2xl">
         <h2 class="editorial-title text-2xl font-bold text-white mb-2">Architectural Project Dossier Synthesizer</h2>
@@ -578,31 +646,79 @@ def index_html():
 
   <!-- JavaScript Client Logic -->
   <script>
-    function switchTab(tabId) {
-      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-      document.getElementById(tabId).classList.remove('hidden');
+    // Global registry of all fetched articles to support instantaneous shortlisting
+    const articleRegistry = new Map();
+    // Shortlisted items map: (id or url) -> article item
+    const shortlistMap = new Map();
 
-      document.querySelectorAll('.tab-btn').forEach(el => {
+    function loadShortlistFromStorage() {{
+      try {{
+        const stored = localStorage.getItem('archintel_shortlist');
+        if (stored) {{
+          const list = JSON.parse(stored);
+          list.forEach(item => {{
+            if (item && (item.id || item.url)) {{
+              const k = item.id || item.url;
+              shortlistMap.set(k, item);
+              articleRegistry.set(k, item);
+            }}
+          }});
+        }}
+      }} catch (e) {{
+        console.warn('Could not read localStorage shortlist:', e);
+      }}
+      updateShortlistBadges();
+    }}
+
+    function saveShortlistToStorage() {{
+      try {{
+        const list = Array.from(shortlistMap.values());
+        localStorage.setItem('archintel_shortlist', JSON.stringify(list));
+      }} catch (e) {{
+        console.warn('Could not save localStorage shortlist:', e);
+      }}
+      updateShortlistBadges();
+    }}
+
+    function updateShortlistBadges() {{
+      const count = shortlistMap.size;
+      const tabBadge = document.getElementById('tab-shortlist-badge');
+      if (tabBadge) tabBadge.innerText = count;
+      const headerBadge = document.getElementById('header-shortlist-count');
+      if (headerBadge) headerBadge.innerText = count;
+      const btnBadge = document.getElementById('shortlist-btn-count');
+      if (btnBadge) btnBadge.innerText = `${{count}} Selected`;
+    }}
+
+    function switchTab(tabId) {{
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      const targetContent = document.getElementById(tabId);
+      if (targetContent) targetContent.classList.remove('hidden');
+
+      document.querySelectorAll('.tab-btn').forEach(el => {{
         el.classList.remove('border-cyan-400', 'text-cyan-400');
         el.classList.add('border-transparent', 'text-slate-400');
-      });
+      }});
 
-      if (tabId === 'tab-finder') {
+      if (tabId === 'tab-finder') {{
         document.getElementById('nav-finder').classList.add('border-cyan-400', 'text-cyan-400');
-      } else if (tabId === 'tab-intelligence') {
+      }} else if (tabId === 'tab-intelligence') {{
         document.getElementById('nav-intelligence').classList.add('border-cyan-400', 'text-cyan-400');
         loadIntelligence('ALL');
-      } else if (tabId === 'tab-dossier') {
+      }} else if (tabId === 'tab-shortlist') {{
+        document.getElementById('nav-shortlist').classList.add('border-cyan-400', 'text-cyan-400');
+        renderShortlistGrid();
+      }} else if (tabId === 'tab-dossier') {{
         document.getElementById('nav-dossier').classList.add('border-cyan-400', 'text-cyan-400');
-      }
-    }
+      }}
+    }}
 
-    function setQuery(text) {
+    function setQuery(text) {{
       document.getElementById('search-query').value = text;
       executeSearch();
-    }
+    }}
 
-    async function executeSearch() {
+    async function executeSearch() {{
       const query = document.getElementById('search-query').value.trim();
       if (!query) return;
 
@@ -614,59 +730,67 @@ def index_html():
       btn.innerHTML = '<span>Searching...</span>';
       btn.disabled = true;
 
-      try {
-        const res = await fetch('/api/search', {
+      try {{
+        const res = await fetch('/api/search', {{
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{
             query: query,
             category: category,
             typology: typology,
             min_relevance: minRel,
             limit: 12
-          })
-        });
+          }})
+        }});
         const data = await res.json();
         renderSearchResults(data.results || []);
         
-        if (data.results && data.results.length > 0) {
+        if (data.results && data.results.length > 0) {{
           document.getElementById('dossier-cta').classList.remove('hidden');
-        } else {
+        }} else {{
           document.getElementById('dossier-cta').classList.add('hidden');
-        }
-      } catch (err) {
+        }}
+      }} catch (err) {{
         console.error('Search error:', err);
-      } finally {
+      }} finally {{
         btn.innerHTML = '<span>Search</span>';
         btn.disabled = false;
-      }
-    }
+      }}
+    }}
 
-    function renderSearchResults(items) {
+    function renderSearchResults(items) {{
       const container = document.getElementById('search-results');
       const empty = document.getElementById('search-empty');
       const header = document.getElementById('search-results-header');
       const countLabel = document.getElementById('results-count-label');
 
       container.innerHTML = '';
-      if (!items || items.length === 0) {
+      if (!items || items.length === 0) {{
         empty.classList.remove('hidden');
         header.classList.add('hidden');
         empty.innerText = 'No matching precedents found for this query and relevance threshold.';
         return;
-      }
+      }}
 
       empty.classList.add('hidden');
       header.classList.remove('hidden');
-      countLabel.innerText = `Found ${items.length} Verified Architectural Precedents`;
+      countLabel.innerText = `Found ${{items.length}} Verified Architectural Precedents`;
 
-      items.forEach(item => {
+      items.forEach(item => {{
         const card = createPrecedentCard(item, true);
         container.appendChild(card);
-      });
-    }
+      }});
+    }}
 
-    function createPrecedentCard(item, showScore = false) {
+    function createPrecedentCard(item, showScore = false) {{
+      const idKey = item.id || item.url;
+      articleRegistry.set(idKey, item);
+
+      const isStarred = shortlistMap.has(idKey) || !!item.is_bookmarked;
+      if (isStarred && !shortlistMap.has(idKey)) {{
+        shortlistMap.set(idKey, item);
+      }}
+
       const div = document.createElement('div');
       div.className = 'glass-card rounded-xl p-5 flex flex-col justify-between';
 
@@ -675,93 +799,93 @@ def index_html():
       if (item.category === 'MATERIAL_LAUNCH_NEWS') catBadge = 'bg-emerald-950 text-emerald-300 border-emerald-800';
 
       const matchHtml = showScore ? 
-        `<span class="text-xs font-mono font-bold text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800">${(item.similarity_score * 100).toFixed(1)}% Match</span>` : '';
+        `<span class="text-xs font-mono font-bold text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800">${{(item.similarity_score * 100).toFixed(1)}}% Match</span>` : '';
 
       const materials = (item.materials_used && item.materials_used !== 'N/A') ?
-        item.materials_used.split(',').slice(0, 3).map(m => `<span class="inline-block bg-slate-800 text-slate-300 text-[10px] px-2 py-0.5 rounded-full mr-1 mt-1 border border-slate-700">${m.trim()}</span>`).join('') : '';
+        item.materials_used.split(',').slice(0, 3).map(m => `<span class="inline-block bg-slate-800 text-slate-300 text-[10px] px-2 py-0.5 rounded-full mr-1 mt-1 border border-slate-700">${{m.trim()}}</span>`).join('') : '';
 
       div.innerHTML = `
         <div>
           <div class="flex items-center justify-between gap-2 mb-2">
-            <span class="text-[10px] uppercase font-mono font-semibold px-2 py-0.5 rounded border ${catBadge}">${item.category.replace('_NEWS', '')}</span>
-            ${matchHtml}
+            <span class="text-[10px] uppercase font-mono font-semibold px-2 py-0.5 rounded border ${{catBadge}}">${{item.category.replace('_NEWS', '')}}</span>
+            ${{matchHtml}}
           </div>
           <h3 class="font-bold text-white text-base leading-snug mb-2 hover:text-cyan-400 transition">
-            <a href="${item.url}" target="_blank" rel="noopener noreferrer">${item.title}</a>
+            <a href="${{item.url}}" target="_blank" rel="noopener noreferrer">${{item.title}}</a>
           </h3>
           <div class="text-xs text-slate-400 mb-3 space-y-0.5">
-            <div><span class="text-slate-500">Source:</span> <span class="text-slate-300 font-medium">${item.source_name}</span> | <span class="text-slate-500">Studio:</span> <span class="text-slate-300">${item.architect_or_manufacturer || 'Studio'}</span></div>
-            <div><span class="text-slate-500">Typology:</span> ${item.project_typology || 'General'} • <span class="text-slate-500">Climate:</span> ${item.climate_or_location || 'Global'}</div>
+            <div><span class="text-slate-500">Source:</span> <span class="text-slate-300 font-medium">${{item.source_name}}</span> | <span class="text-slate-500">Studio:</span> <span class="text-slate-300">${{item.architect_or_manufacturer || 'Studio'}}</span></div>
+            <div><span class="text-slate-500">Typology:</span> ${{item.project_typology || 'General'}} • <span class="text-slate-500">Climate:</span> ${{item.climate_or_location || 'Global'}}</div>
           </div>
-          ${materials ? `<div class="mb-3">${materials}</div>` : ''}}
+          ${{materials ? `<div class="mb-3">${{materials}}</div>` : ''}}
           <div class="text-xs text-slate-300 space-y-1 mb-4 border-t border-slate-800/80 pt-2">
-            ${item.bullet_1 ? `<p class="line-clamp-2 text-slate-300">▪ ${item.bullet_1}</p>` : ''}
+            ${{item.bullet_1 ? `<p class="line-clamp-2 text-slate-300">▪ ${{item.bullet_1}}</p>` : ''}}
           </div>
         </div>
         <div class="pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs">
-          <a href="${item.url}" target="_blank" rel="noopener noreferrer" class="text-cyan-400 hover:text-cyan-300 font-medium flex items-center space-x-1">
+          <a href="${{item.url}}" target="_blank" rel="noopener noreferrer" class="text-cyan-400 hover:text-cyan-300 font-medium flex items-center space-x-1">
             <span>Verified Source</span>
             <span class="text-[10px]">↗</span>
           </a>
           <div class="flex items-center space-x-2">
-            <button onclick="toggleBookmark('${item.id || item.url}', this)" class="text-slate-400 hover:text-amber-400 transition flex items-center space-x-0.5 ${item.is_bookmarked ? 'text-amber-400 font-semibold' : ''}">
-              <span>${item.is_bookmarked ? '★ Shortlisted' : '☆ Shortlist'}</span>
+            <button onclick="toggleBookmark('${{idKey}}', this)" class="btn-bookmark-star text-slate-400 hover:text-amber-400 transition flex items-center space-x-0.5 ${{isStarred ? 'text-amber-400 font-semibold' : ''}}" data-id="${{idKey}}">
+              <span>${{isStarred ? '★ Shortlisted' : '☆ Shortlist'}}</span>
             </button>
             <span class="text-slate-600">•</span>
-            <button onclick="synthesizeSingle('${item.title.replace(/'/g, "\\'")}')" class="text-slate-400 hover:text-white transition">Cite in Dossier</button>
+            <button onclick="synthesizeSingle('${{item.title.replace(/'/g, "\\'")}}')" class="text-slate-400 hover:text-white transition">Cite</button>
           </div>
         </div>
       `;
       return div;
-    }
+    }}
 
-    async function loadIntelligence(cat) {
+    async function loadIntelligence(cat) {{
       const grid = document.getElementById('intelligence-grid');
       grid.innerHTML = '<div class="col-span-3 text-center py-12 text-slate-500">Loading intelligence feed...</div>';
 
-      document.querySelectorAll('.intel-filter').forEach(b => {
+      document.querySelectorAll('.intel-filter').forEach(b => {{
         b.classList.remove('bg-cyan-600', 'text-white');
         b.classList.add('bg-slate-800', 'text-slate-300');
-      });
+      }});
 
-      const btnMap = { 'ALL': 'flt-all', 'ARCHITECTURAL_NEWS': 'flt-arch', 'INTERIOR_NEWS': 'flt-int', 'MATERIAL_LAUNCH_NEWS': 'flt-mat' };
+      const btnMap = {{ 'ALL': 'flt-all', 'ARCHITECTURAL_NEWS': 'flt-arch', 'INTERIOR_NEWS': 'flt-int', 'MATERIAL_LAUNCH_NEWS': 'flt-mat' }};
       const activeBtn = document.getElementById(btnMap[cat]);
-      if (activeBtn) {
+      if (activeBtn) {{
         activeBtn.classList.remove('bg-slate-800', 'text-slate-300');
         activeBtn.classList.add('bg-cyan-600', 'text-white');
-      }
+      }}
 
-      try {
-        const url = cat === 'ALL' ? '/api/articles?limit=48' : `/api/articles?category=${cat}&limit=48`;
+      try {{
+        const url = cat === 'ALL' ? '/api/articles?limit=48' : `/api/articles?category=${{cat}}&limit=48`;
         const res = await fetch(url);
         const data = await res.json();
         
         grid.innerHTML = '';
-        if (!data.items || data.items.length === 0) {
+        if (!data.items || data.items.length === 0) {{
           grid.innerHTML = '<div class="col-span-3 text-center py-12 text-slate-500">No items in this category yet. Run "Sync Feeds" to ingest latest articles.</div>';
           return;
-        }
+        }}
 
-        data.items.forEach(item => {
+        data.items.forEach(item => {{
           grid.appendChild(createPrecedentCard(item, false));
-        });
-      } catch (err) {
+        }});
+      }} catch (err) {{
         grid.innerHTML = '<div class="col-span-3 text-center py-12 text-red-400">Failed to load feed.</div>';
-      }
-    }
+      }}
+    }}
 
-    function synthesizeSingle(title) {
-      document.getElementById('dossier-brief-input').value = `Architectural analysis and precedent synthesis based on "${title}"`;
+    function synthesizeSingle(title) {{
+      document.getElementById('dossier-brief-input').value = `Architectural analysis and precedent synthesis based on "${{title}}"`;
       switchTab('tab-dossier');
-    }
+    }}
 
-    function downloadDossierFromSearch() {
+    function downloadDossierFromSearch() {{
       const query = document.getElementById('search-query').value.trim();
       document.getElementById('dossier-brief-input').value = query;
       downloadDirectDossier();
-    }
+    }}
 
-    async function downloadDirectDossier() {
+    async function downloadDirectDossier() {{
       const brief = document.getElementById('dossier-brief-input').value.trim();
       const topk = parseInt(document.getElementById('dossier-topk').value) || 5;
       if (!brief) return alert('Please enter a project brief.');
@@ -771,12 +895,12 @@ def index_html():
       btn.innerHTML = '<span>⚡ Synthesizing via Gemini & Compiling Word Doc...</span>';
       btn.disabled = true;
 
-      try {
-        const res = await fetch('/api/dossier', {
+      try {{
+        const res = await fetch('/api/dossier', {{
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ brief: brief, top_k: topk })
-        });
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ brief: brief, top_k: topk }})
+        }});
 
         if (!res.ok) throw new Error('Dossier generation failed');
 
@@ -791,15 +915,15 @@ def index_html():
         a.click();
         a.remove();
         window.URL.revokeObjectURL(downloadUrl);
-      } catch (err) {
+      }} catch (err) {{
         alert('Could not generate dossier: ' + err.message);
-      } finally {
+      }} finally {{
         btn.innerHTML = originalText;
         btn.disabled = false;
-      }
-    }
+      }}
+    }}
 
-    async function previewDossier() {
+    async function previewDossier() {{
       const brief = document.getElementById('dossier-brief-input').value.trim();
       const topk = parseInt(document.getElementById('dossier-topk').value) || 5;
       if (!brief) return alert('Please enter a project brief.');
@@ -808,71 +932,209 @@ def index_html():
       btn.innerHTML = '<span>Synthesizing...</span>';
       btn.disabled = true;
 
-      try {
-        const res = await fetch('/api/dossier/preview', {
+      try {{
+        const res = await fetch('/api/dossier/preview', {{
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ brief: brief, top_k: topk })
-        });
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ brief: brief, top_k: topk }})
+        }});
         const data = await res.json();
-        if (data.success) {
+        if (data.success) {{
           document.getElementById('dossier-preview-box').classList.remove('hidden');
           document.getElementById('preview-filename').innerText = data.filename;
           document.getElementById('preview-markdown').innerText = data.markdown;
-        }
-      } catch (err) {
+        }}
+      }} catch (err) {{
         alert('Preview failed: ' + err.message);
-      } finally {
+      }} finally {{
         btn.innerHTML = '<span>👁️ On-Screen Preview</span>';
         btn.disabled = false;
-      }
-    }
+      }}
+    }}
 
-    async function toggleBookmark(id, btn) {
-      try {
-        const res = await fetch('/api/bookmark', {
+    async function toggleBookmark(id, btn) {{
+      const item = articleRegistry.get(id) || {{ id: id, url: id, title: 'Arch Precedent' }};
+      const currentlyStarred = shortlistMap.has(id);
+
+      if (currentlyStarred) {{
+        shortlistMap.delete(id);
+      }} else {{
+        shortlistMap.set(id, item);
+      }}
+      saveShortlistToStorage();
+
+      // Synchronize all buttons matching this ID across the entire DOM
+      document.querySelectorAll(`[data-id="${{id}}"]`).forEach(b => {{
+        if (!currentlyStarred) {{
+          b.innerHTML = '<span>★ Shortlisted</span>';
+          b.classList.add('text-amber-400', 'font-semibold');
+        }} else {{
+          b.innerHTML = '<span>☆ Shortlist</span>';
+          b.classList.remove('text-amber-400', 'font-semibold');
+        }}
+      }});
+
+      // If user is currently looking at the Shortlist tab, re-render immediately
+      const activeShortlistTab = document.getElementById('tab-shortlist');
+      if (activeShortlistTab && !activeShortlistTab.classList.contains('hidden')) {{
+        renderShortlistGrid();
+      }}
+
+      // Background cloud sync
+      try {{
+        await fetch('/api/bookmark', {{
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: id })
-        });
-        const data = await res.json();
-        if (data.success) {
-          if (data.is_bookmarked) {
-            btn.innerHTML = '<span>★ Shortlisted</span>';
-            btn.classList.add('text-amber-400', 'font-semibold');
-          } else {
-            btn.innerHTML = '<span>☆ Shortlist</span>';
-            btn.classList.remove('text-amber-400', 'font-semibold');
-          }
-        }
-      } catch (err) {
-        console.error('Bookmark toggle failed:', err);
-      }
-    }
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ id: id }})
+        }});
+      }} catch (err) {{
+        console.debug('Bookmark cloud sync notice:', err);
+      }}
+    }}
 
-    async function triggerIngest() {
+    function renderShortlistGrid() {{
+      const container = document.getElementById('shortlist-grid');
+      const empty = document.getElementById('shortlist-empty');
+      if (!container || !empty) return;
+
+      container.innerHTML = '';
+      const items = Array.from(shortlistMap.values());
+      if (items.length === 0) {{
+        empty.classList.remove('hidden');
+        return;
+      }}
+
+      empty.classList.add('hidden');
+      items.forEach(item => {{
+        const card = createPrecedentCard(item, false);
+        container.appendChild(card);
+      }});
+    }}
+
+    function clearShortlist() {{
+      if (shortlistMap.size === 0) return;
+      if (!confirm('Clear all shortlisted precedents from this board?')) return;
+      shortlistMap.clear();
+      saveShortlistToStorage();
+      renderShortlistGrid();
+      document.querySelectorAll('.btn-bookmark-star').forEach(b => {{
+        b.innerHTML = '<span>☆ Shortlist</span>';
+        b.classList.remove('text-amber-400', 'font-semibold');
+      }});
+    }}
+
+    async function downloadShortlistDossier() {{
+      const ids = Array.from(shortlistMap.keys());
+      if (ids.length === 0) {{
+        alert('Your shortlist is empty! Star at least 1 architectural precedent first.');
+        return;
+      }}
+
+      const btn = document.getElementById('btn-download-shortlist-dossier');
+      const original = btn.innerHTML;
+      btn.innerHTML = '<span>⚡ Synthesizing Shortlist Dossier...</span>';
+      btn.disabled = true;
+
+      try {{
+        const res = await fetch('/api/dossier', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{
+            article_ids: ids,
+            brief: `Curated Studio Precedent Review (${{ids.length}} Shortlisted Projects)`
+          }})
+        }});
+
+        if (!res.ok) throw new Error('Shortlist dossier generation failed');
+
+        const blob = await res.blob();
+        const headerFilename = res.headers.get('X-Dossier-Filename') || 'ArchIntel-Shortlist-Dossier.docx';
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = headerFilename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(downloadUrl);
+      }} catch (err) {{
+        alert('Could not generate shortlist dossier: ' + err.message);
+      }} finally {{
+        btn.innerHTML = original;
+        btn.disabled = false;
+      }}
+    }}
+
+    async function previewShortlistDossier() {{
+      const ids = Array.from(shortlistMap.keys());
+      if (ids.length === 0) {{
+        alert('Your shortlist is empty! Star at least 1 architectural precedent first.');
+        return;
+      }}
+
+      const btn = document.getElementById('btn-preview-shortlist');
+      btn.innerHTML = '<span>Synthesizing...</span>';
+      btn.disabled = true;
+
+      try {{
+        const res = await fetch('/api/dossier/preview', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{
+            article_ids: ids,
+            brief: `Curated Studio Precedent Review (${{ids.length}} Shortlisted Projects)`
+          }})
+        }});
+        const data = await res.json();
+        if (data.success) {{
+          document.getElementById('shortlist-preview-box').classList.remove('hidden');
+          document.getElementById('shortlist-preview-markdown').innerText = data.markdown;
+        }}
+      }} catch (err) {{
+        alert('Preview failed: ' + err.message);
+      }} finally {{
+        btn.innerHTML = '<span>👁️ Preview</span>';
+        btn.disabled = false;
+      }}
+    }}
+
+    async function triggerIngest() {{
       const btn = document.getElementById('btn-ingest');
       btn.innerHTML = '<span>⏳ Ingesting (Fast Sync)...</span>';
       btn.disabled = true;
 
-      try {
-        const res = await fetch('/api/ingest?max_items=1&max_sources=3', { method: 'POST' });
+      try {{
+        const res = await fetch('/api/ingest?max_items=1&max_sources=3', {{ method: 'POST' }});
         const data = await res.json();
-        alert(`Fast Sync complete! Ingested ${data.ingested_candidate_count} articles, indexed ${data.indexed_count} into knowledge base. Total now: ${data.total_now}`);
-        document.getElementById('db-counter').innerText = `${data.total_now} Precedents`;
-      } catch (err) {
+        alert(`Fast Sync complete! Ingested ${{data.ingested_candidate_count}} articles, indexed ${{data.indexed_count}} into knowledge base. Total now: ${{data.total_now}}`);
+        document.getElementById('db-counter').innerText = `${{data.total_now}} Precedents`;
+      }} catch (err) {{
         alert('Ingestion error: ' + err.message);
-      } finally {
+      }} finally {{
         btn.innerHTML = '<span>⚡ Sync Feeds</span>';
         btn.disabled = false;
-      }
-    }
+      }}
+    }}
 
-    // Auto-search on initial load
-    window.addEventListener('DOMContentLoaded', () => {
+    // Auto-search and initialize shortlist on initial load
+    window.addEventListener('DOMContentLoaded', async () => {{
+      loadShortlistFromStorage();
+      try {{
+        const res = await fetch('/api/bookmarks');
+        const data = await res.json();
+        if (data.items && data.items.length > 0) {{
+          data.items.forEach(it => {{
+            const k = it.id || it.url;
+            articleRegistry.set(k, it);
+            shortlistMap.set(k, it);
+          }});
+          saveShortlistToStorage();
+        }}
+      }} catch (e) {{
+        console.debug('Initial bookmark sync notice:', e);
+      }}
       executeSearch();
-    });
+    }});
   </script>
 </body>
 </html>
-"""
