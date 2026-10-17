@@ -47,9 +47,9 @@ class CaseStudyDatabase:
 
         self._init_db()
 
-        # Connect to Google GenAI for text-embedding-004 if API key is provided
+        # Connect to Google GenAI for embeddings if API key is provided
         self.api_key = os.getenv("GEMINI_API_KEY")
-        self.embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004")
+        self.embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
         self.genai_client = None
 
         if self.api_key and self.api_key != "YOUR_GEMINI_API_KEY_HERE":
@@ -94,7 +94,7 @@ class CaseStudyDatabase:
     def _get_embedding(self, text: str) -> List[float]:
         """
         Generates semantic embedding vector.
-        Uses Google GenAI text-embedding-004 when available, or a deterministic vector fallback offline.
+        Uses Google GenAI gemini-embedding-001 when available, or a deterministic vector fallback offline.
         """
         if self.genai_client:
             try:
@@ -102,12 +102,14 @@ class CaseStudyDatabase:
                     model=self.embedding_model,
                     contents=text
                 )
-                if hasattr(response, "embedding") and hasattr(response.embedding, "values"):
-                    return list(response.embedding.values)
-                elif hasattr(response, "embeddings") and len(response.embeddings) > 0:
-                    return list(response.embeddings[0].values)
+                embeddings = getattr(response, "embeddings", None)
+                if embeddings and len(embeddings) > 0:
+                    return list(embeddings[0].values)
+                single_emb = getattr(response, "embedding", None)
+                if single_emb and hasattr(single_emb, "values"):
+                    return list(single_emb.values)
             except Exception as e:
-                logger.debug(f"GenAI embedding error: {e}. Falling back to local vectorizer.")
+                logger.warning(f"GenAI embedding error: {e}. Falling back to local vectorizer.")
 
         # Offline deterministic fallback vectorizer (dimension 128)
         # Allows full testing of cosine ranking without active API key
@@ -178,23 +180,11 @@ CONTENT:
         try:
             with self._get_connection() as conn:
                 conn.execute("""
-                    INSERT INTO case_studies (
+                    INSERT OR REPLACE INTO case_studies (
                         id, url, title, source_name, publish_date, category,
                         architect_or_manufacturer, project_typology, climate_or_location,
                         materials_used, bullet_1, bullet_2, bullet_3, document_text, embedding
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        title=excluded.title,
-                        category=excluded.category,
-                        architect_or_manufacturer=excluded.architect_or_manufacturer,
-                        project_typology=excluded.project_typology,
-                        climate_or_location=excluded.climate_or_location,
-                        materials_used=excluded.materials_used,
-                        bullet_1=excluded.bullet_1,
-                        bullet_2=excluded.bullet_2,
-                        bullet_3=excluded.bullet_3,
-                        document_text=excluded.document_text,
-                        embedding=excluded.embedding
                 """, (
                     doc_id, url, title, source_name, publish_date, category_str,
                     architect, typology, climate, materials_str,
