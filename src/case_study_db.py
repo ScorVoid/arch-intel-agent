@@ -1,0 +1,281 @@
+"""
+Module: src/case_study_db.py
+Purpose: Persistent SQLite + Vector Embedding Case Study Retrieval Engine.
+
+Architectural Design Notes for AI Engineering:
+---------------------------------------------
+1. Why Vector Embeddings for Architecture?
+   Architects search using descriptive, conceptual language:
+   "Hospitality project in a humid coastal climate using sustainable timber and perforated brick"
+   Traditional keyword search fails when an article discusses "resorts", "tropical shores", "CLT mass timber",
+   and "porous terracotta screens". Vector embeddings map both the user's prompt and the articles
+   into an n-dimensional geometric space where conceptual similarity translates directly to vector proximity.
+2. Production SQLite + Dense Vector Search:
+   Using SQLite with NumPy vector similarity offers distinct enterprise advantages:
+   - Zero compilation overhead: Standard library SQLite requires no external C++ toolchains on Windows.
+   - Atomic persistence: All case study records and embeddings reside in `data/case_studies_db/case_studies.sqlite3`.
+   - Hybrid Filtering: Combines hard SQL filters (`category`, `typology`) with dense semantic ranking.
+3. Offline & Online Embedding Support:
+   When `GEMINI_API_KEY` is provided, high-dimensional embeddings are generated via Google GenAI's
+   `text-embedding-004`. In offline/test mode, an intelligent fallback vectorizer allows local testing.
+"""
+
+import os
+import json
+import sqlite3
+import logging
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+import numpy as np
+from dotenv import load_dotenv
+
+load_dotenv()
+logger = logging.getLogger("ArchIntel.CaseStudyDB")
+
+DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data" / "case_studies_db"
+DEFAULT_DB_PATH = DEFAULT_DB_DIR / "case_studies.sqlite3"
+
+
+class CaseStudyDatabase:
+    """
+    Manages persistent indexing and semantic retrieval of architectural precedents in SQLite.
+    """
+
+    def __init__(self, db_path: Optional[Path] = None):
+        self.db_path = db_path or DEFAULT_DB_PATH
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self._init_db()
+
+        # Connect to Google GenAI for text-embedding-004 if API key is provided
+        self.api_key = os.getenv("GEMINI_API_KEY")
+        self.embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004")
+        self.genai_client = None
+
+        if self.api_key and self.api_key != "YOUR_GEMINI_API_KEY_HERE":
+            try:
+                from google import genai
+                self.genai_client = genai.Client(api_key=self.api_key)
+                logger.info(f"Initialized Google GenAI Embeddings client ({self.embedding_model})")
+            except Exception as e:
+                logger.warning(f"Could not connect to GenAI embeddings: {e}")
+
+    def _get_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self):
+        """Creates the case studies table and indexes if not already present."""
+        with self._get_connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS case_studies (
+                    id TEXT PRIMARY KEY,
+                    url TEXT UNIQUE,
+                    title TEXT NOT NULL,
+                    source_name TEXT,
+                    publish_date TEXT,
+                    category TEXT,
+                    architect_or_manufacturer TEXT,
+                    project_typology TEXT,
+                    climate_or_location TEXT,
+                    materials_used TEXT,
+                    bullet_1 TEXT,
+                    bullet_2 TEXT,
+                    bullet_3 TEXT,
+                    document_text TEXT,
+                    embedding TEXT
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_category ON case_studies(category)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_typology ON case_studies(project_typology)")
+            conn.commit()
+
+    def _get_embedding(self, text: str) -> List[float]:
+        """
+        Generates semantic embedding vector.
+        Uses Google GenAI text-embedding-004 when available, or a deterministic vector fallback offline.
+        """
+        if self.genai_client:
+            try:
+                response = self.genai_client.models.embed_content(
+                    model=self.embedding_model,
+                    contents=text
+                )
+                if hasattr(response, "embedding") and hasattr(response.embedding, "values"):
+                    return list(response.embedding.values)
+                elif hasattr(response, "embeddings") and len(response.embeddings) > 0:
+                    return list(response.embeddings[0].values)
+            except Exception as e:
+                logger.debug(f"GenAI embedding error: {e}. Falling back to local vectorizer.")
+
+        # Offline deterministic fallback vectorizer (dimension 128)
+        # Allows full testing of cosine ranking without active API key
+        return self._offline_vectorize(text)
+
+    def _offline_vectorize(self, text: str, dim: int = 128) -> List[float]:
+        """Generates a normalized deterministic feature vector based on text token hashing."""
+        words = text.lower().split()
+        vec = np.zeros(dim, dtype=np.float32)
+        for w in words:
+            h = hash(w) % dim
+            vec[h] += 1.0
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec = vec / norm
+        return vec.tolist()
+
+    def index_article(self, article: Dict[str, Any], triage_result: Any) -> bool:
+        """
+        Indexes a verified article and its structured metadata into SQLite.
+        """
+        if not getattr(triage_result, "is_relevant", True):
+            logger.info(f"Skipping indexing for irrelevant article: {article.get('title')}")
+            return False
+
+        url = article.get("url", "")
+        if not url:
+            return False
+
+        doc_id = f"arch_{abs(hash(url))}"
+        title = article.get("title", "Untitled")
+        source_name = article.get("source_name", "Unknown")
+        publish_date = article.get("publish_date", "")
+
+        category = getattr(triage_result, "category", "ARCHITECTURAL_NEWS")
+        category_str = category.value if hasattr(category, "value") else str(category)
+
+        architect = getattr(triage_result, "architect_or_manufacturer", "Unknown") or "Unknown"
+        typology = getattr(triage_result, "project_typology", "General") or "General"
+        climate = getattr(triage_result, "climate_or_location", "Global") or "Global"
+        materials = getattr(triage_result, "materials_used", []) or []
+        materials_str = ", ".join(materials) if isinstance(materials, list) else str(materials)
+
+        bullets = getattr(triage_result, "three_bullet_summary", [])
+        bullet_1 = bullets[0] if len(bullets) > 0 else ""
+        bullet_2 = bullets[1] if len(bullets) > 1 else ""
+        bullet_3 = bullets[2] if len(bullets) > 2 else ""
+
+        document_text = f"""
+TITLE: {title}
+SOURCE: {source_name}
+CATEGORY: {category_str}
+ARCHITECT/MANUFACTURER: {architect}
+TYPOLOGY: {typology}
+LOCATION/CLIMATE: {climate}
+MATERIALS & FINISHES: {materials_str}
+SUMMARY:
+- {bullet_1}
+- {bullet_2}
+- {bullet_3}
+CONTENT:
+{article.get('raw_content', '')[:1200]}
+""".strip()
+
+        embedding = self._get_embedding(document_text)
+        embedding_json = json.dumps(embedding)
+
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO case_studies (
+                        id, url, title, source_name, publish_date, category,
+                        architect_or_manufacturer, project_typology, climate_or_location,
+                        materials_used, bullet_1, bullet_2, bullet_3, document_text, embedding
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        title=excluded.title,
+                        category=excluded.category,
+                        architect_or_manufacturer=excluded.architect_or_manufacturer,
+                        project_typology=excluded.project_typology,
+                        climate_or_location=excluded.climate_or_location,
+                        materials_used=excluded.materials_used,
+                        bullet_1=excluded.bullet_1,
+                        bullet_2=excluded.bullet_2,
+                        bullet_3=excluded.bullet_3,
+                        document_text=excluded.document_text,
+                        embedding=excluded.embedding
+                """, (
+                    doc_id, url, title, source_name, publish_date, category_str,
+                    architect, typology, climate, materials_str,
+                    bullet_1, bullet_2, bullet_3, document_text, embedding_json
+                ))
+                conn.commit()
+            logger.info(f"Indexed case study: '{title}' [{category_str}]")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to index case study into SQLite: {e}")
+            return False
+
+    def search_case_studies(
+        self,
+        query: str,
+        n_results: int = 5,
+        category: Optional[str] = None,
+        typology: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves top-matching case studies given a natural-language architectural project query.
+        Combines SQL metadata filtering with cosine vector similarity ranking.
+        """
+        query_vec = np.array(self._get_embedding(query), dtype=np.float32)
+        q_norm = np.linalg.norm(query_vec)
+        if q_norm > 0:
+            query_vec = query_vec / q_norm
+
+        conditions = []
+        params = []
+
+        if category and category != "ALL":
+            conditions.append("category = ?")
+            params.append(category)
+
+        if typology and typology != "ALL":
+            conditions.append("project_typology LIKE ?")
+            params.append(f"%{typology}%")
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        sql = f"""
+            SELECT id, url, title, source_name, publish_date, category,
+                   architect_or_manufacturer, project_typology, climate_or_location,
+                   materials_used, bullet_1, bullet_2, bullet_3, embedding
+            FROM case_studies
+            {where_clause}
+        """
+
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+
+        if not rows:
+            return []
+
+        scored_results = []
+        for row in rows:
+            doc_data = dict(row)
+            emb_str = doc_data.pop("embedding", "[]")
+            try:
+                emb_vec = np.array(json.loads(emb_str), dtype=np.float32)
+                d_norm = np.linalg.norm(emb_vec)
+                if d_norm > 0 and q_norm > 0:
+                    similarity = float(np.dot(query_vec, emb_vec) / (q_norm * d_norm))
+                else:
+                    similarity = 0.5
+            except Exception:
+                similarity = 0.5
+
+            doc_data["similarity_score"] = round(similarity, 3)
+            scored_results.append(doc_data)
+
+        # Sort descending by similarity score
+        scored_results.sort(key=lambda x: x["similarity_score"], reverse=True)
+        return scored_results[:n_results]
+
+    def get_total_count(self) -> int:
+        """Returns total number of indexed case studies."""
+        try:
+            with self._get_connection() as conn:
+                res = conn.execute("SELECT COUNT(*) FROM case_studies").fetchone()
+                return res[0] if res else 0
+        except Exception:
+            return 0
