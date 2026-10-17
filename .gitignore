@@ -1,0 +1,31 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python byte-code and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment secrets (Strictly never commit API keys)
+.env
+.env.local
+*.env
+
+# Local ChromaDB / SQLite Vector Store & Caches
+data/case_studies_db/
+*.db
+*.sqlite3
+
+# Streamlit logs & cache
+.streamlit/
+
+# OS artifacts
+.DS_Store
+Thumbs.db

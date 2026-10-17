@@ -1,0 +1,52 @@
+name: Daily Architectural Intelligence Digest
+
+on:
+  schedule:
+    # Runs daily at 07:00 AM UTC (12:30 PM IST / 02:00 AM EST)
+    - cron: '0 7 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  run-digest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run ArchIntel Daily Pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-2.5-flash"
+          GEMINI_EMBEDDING_MODEL: "text-embedding-004"
+        run: |
+          python main.py --max-per-source 3
+
+      - name: Commit and Push Daily Report
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          # Only commit if changes exist
+          if git diff --staged --quiet; then
+            echo "No new changes or reports to commit."
+          else
+            git commit -m "chore(digest): automated daily architectural brief [skip ci]"
+            git push
+          fi

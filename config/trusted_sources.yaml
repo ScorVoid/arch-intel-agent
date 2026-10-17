@@ -1,0 +1,92 @@
+# =====================================================================
+# ArchIntel-Agent: Strict Trusted Source Whitelist
+# =====================================================================
+# Architectural principle: ZERO UNVERIFIED SCRAPING.
+# Any URL whose domain does not match allowed_domains will be discarded
+# immediately before parsing to prevent spam, SEO content, and low-quality data.
+
+allowed_domains:
+  - "archdaily.com"
+  - "www.archdaily.com"
+  - "dezeen.com"
+  - "www.dezeen.com"
+  - "designboom.com"
+  - "www.designboom.com"
+  - "domusweb.it"
+  - "www.domusweb.it"
+  - "architecturalrecord.com"
+  - "www.architecturalrecord.com"
+  - "divisare.com"
+  - "materialdistrict.com"
+  - "transmaterial.net"
+
+sources:
+  - id: "archdaily_main"
+    name: "ArchDaily"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://www.archdaily.com/feed"
+    homepage: "https://www.archdaily.com"
+    enabled: true
+
+  - id: "dezeen_architecture"
+    name: "Dezeen"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://www.dezeen.com/feed/"
+    homepage: "https://www.dezeen.com"
+    enabled: true
+
+  - id: "designboom_architecture"
+    name: "Designboom"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://www.designboom.com/feed/"
+    homepage: "https://www.designboom.com"
+    enabled: true
+
+  - id: "domus_main"
+    name: "Domus"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://www.domusweb.it/en.rss.xml"
+    homepage: "https://www.domusweb.it"
+    enabled: true
+
+  - id: "architectural_record"
+    name: "Architectural Record"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://www.architecturalrecord.com/rss/all"
+    homepage: "https://www.architecturalrecord.com"
+    enabled: true
+
+  - id: "divisare_feed"
+    name: "Divisare"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://divisare.com/feed.atom"
+    homepage: "https://divisare.com"
+    enabled: true
+
+  - id: "material_district"
+    name: "MaterialDistrict"
+    category_hint: "MATERIALS"
+    feed_url: "https://materialdistrict.com/feed/"
+    homepage: "https://materialdistrict.com"
+    enabled: true
+
+  - id: "archdaily_materials"
+    name: "ArchDaily Materials"
+    category_hint: "MATERIALS"
+    feed_url: "https://www.archdaily.com/tag/materials/feed/"
+    homepage: "https://www.archdaily.com"
+    enabled: true
+
+  - id: "dezeen_materials"
+    name: "Dezeen Materials"
+    category_hint: "MATERIALS"
+    feed_url: "https://www.dezeen.com/tag/materials/feed/"
+    homepage: "https://www.dezeen.com"
+    enabled: true
+
+  - id: "transmaterial_news"
+    name: "Transmaterial"
+    category_hint: "MATERIALS"
+    feed_url: "https://transmaterial.net/feed/"
+    homepage: "https://transmaterial.net"
+    enabled: true
