@@ -33,8 +33,8 @@ jobs:
       - name: Run ArchIntel Daily Pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: "gemini-2.5-flash"
-          GEMINI_EMBEDDING_MODEL: "text-embedding-004"
+          GEMINI_MODEL: "gemini-3.8-flash"
+          GEMINI_EMBEDDING_MODEL: "gemini-embedding-001"
         run: |
           python main.py --max-per-source 3
 

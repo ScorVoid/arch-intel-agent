@@ -29,10 +29,24 @@ sources:
     enabled: true
 
   - id: "dezeen_architecture"
-    name: "Dezeen"
+    name: "Dezeen Architecture"
     category_hint: "ARCHITECTURE"
     feed_url: "https://www.dezeen.com/feed/"
     homepage: "https://www.dezeen.com"
+    enabled: true
+
+  - id: "dezeen_interiors"
+    name: "Dezeen Interiors"
+    category_hint: "INTERIORS"
+    feed_url: "https://www.dezeen.com/interiors/feed/"
+    homepage: "https://www.dezeen.com"
+    enabled: true
+
+  - id: "archdaily_interiors"
+    name: "ArchDaily Interiors"
+    category_hint: "INTERIORS"
+    feed_url: "https://www.archdaily.com/tag/interiors/feed/"
+    homepage: "https://www.archdaily.com"
     enabled: true
 
   - id: "designboom_architecture"
@@ -42,32 +56,11 @@ sources:
     homepage: "https://www.designboom.com"
     enabled: true
 
-  - id: "domus_main"
-    name: "Domus"
-    category_hint: "ARCHITECTURE"
-    feed_url: "https://www.domusweb.it/en.rss.xml"
-    homepage: "https://www.domusweb.it"
-    enabled: true
-
   - id: "architectural_record"
     name: "Architectural Record"
     category_hint: "ARCHITECTURE"
-    feed_url: "https://www.architecturalrecord.com/rss/all"
+    feed_url: "https://www.architecturalrecord.com/rss/articles"
     homepage: "https://www.architecturalrecord.com"
-    enabled: true
-
-  - id: "divisare_feed"
-    name: "Divisare"
-    category_hint: "ARCHITECTURE"
-    feed_url: "https://divisare.com/feed.atom"
-    homepage: "https://divisare.com"
-    enabled: true
-
-  - id: "material_district"
-    name: "MaterialDistrict"
-    category_hint: "MATERIALS"
-    feed_url: "https://materialdistrict.com/feed/"
-    homepage: "https://materialdistrict.com"
     enabled: true
 
   - id: "archdaily_materials"
@@ -84,9 +77,30 @@ sources:
     homepage: "https://www.dezeen.com"
     enabled: true
 
+  - id: "domus_main"
+    name: "Domus"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://www.domusweb.it/en.rss.xml"
+    homepage: "https://www.domusweb.it"
+    enabled: false
+
+  - id: "divisare_feed"
+    name: "Divisare"
+    category_hint: "ARCHITECTURE"
+    feed_url: "https://divisare.com/feed.atom"
+    homepage: "https://divisare.com"
+    enabled: false
+
+  - id: "material_district"
+    name: "MaterialDistrict"
+    category_hint: "MATERIALS"
+    feed_url: "https://materialdistrict.com/feed/"
+    homepage: "https://materialdistrict.com"
+    enabled: false
+
   - id: "transmaterial_news"
     name: "Transmaterial"
     category_hint: "MATERIALS"
     feed_url: "https://transmaterial.net/feed/"
     homepage: "https://transmaterial.net"
-    enabled: true
+    enabled: false
