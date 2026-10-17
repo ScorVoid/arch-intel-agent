@@ -1,6 +1,23 @@
 """
 Module: src/case_study_db.py
 Purpose: Persistent SQLite + Vector Embedding Case Study Retrieval Engine.
+
+Architectural Design Notes for AI Engineering:
+---------------------------------------------
+1. Why Vector Embeddings for Architecture?
+   Architects search using descriptive, conceptual language:
+   "Hospitality project in a humid coastal climate using sustainable timber and perforated brick"
+   Traditional keyword search fails when an article discusses "resorts", "tropical shores", "CLT mass timber",
+   and "porous terracotta screens". Vector embeddings map both the user's prompt and the articles
+   into an n-dimensional geometric space where conceptual similarity translates directly to vector proximity.
+2. Production SQLite + Dense Vector Search:
+   Using SQLite with NumPy vector similarity offers distinct enterprise advantages:
+   - Zero compilation overhead: Standard library SQLite requires no external C++ toolchains on Windows.
+   - Atomic persistence: All case study records and embeddings reside in `data/case_studies_db/case_studies.sqlite3`.
+   - Hybrid Filtering: Combines hard SQL filters (`category`, `typology`) with dense semantic ranking.
+3. Offline & Online Embedding Support:
+   When `GEMINI_API_KEY` is provided, high-dimensional embeddings are generated via Google GenAI's
+   `text-embedding-004`. In offline/test mode, an intelligent fallback vectorizer allows local testing.
 """
 
 import os
@@ -105,6 +122,7 @@ class CaseStudyDatabase:
 
                 # Auto-seed from data/seed_case_studies.json if database is empty (e.g. freshly booted on Vercel)
                 try:
+
                     count = conn.execute("SELECT COUNT(*) FROM case_studies").fetchone()[0]
                     if count == 0:
                         seed_path = Path(__file__).resolve().parent.parent / "data" / "seed_case_studies.json"
@@ -134,6 +152,8 @@ class CaseStudyDatabase:
         except Exception as e:
             logger.warning(f"Could not initialize or migrate schema (might be read-only): {e}")
 
+
+
     def _get_embedding(self, text: str) -> List[float]:
         """
         Generates semantic embedding vector.
@@ -155,6 +175,7 @@ class CaseStudyDatabase:
                 logger.warning(f"GenAI embedding error: {e}. Falling back to local vectorizer.")
 
         # Offline deterministic fallback vectorizer (dimension 128)
+        # Allows full testing of cosine ranking without active API key
         return self._offline_vectorize(text)
 
     def _offline_vectorize(self, text: str, dim: int = 128) -> List[float]:
@@ -170,7 +191,9 @@ class CaseStudyDatabase:
         return vec.tolist()
 
     def index_article(self, article: Dict[str, Any], triage_result: Any) -> bool:
-        """Indexes a verified article and its structured metadata into SQLite."""
+        """
+        Indexes a verified article and its structured metadata into SQLite.
+        """
         if not getattr(triage_result, "is_relevant", True):
             logger.info(f"Skipping indexing for irrelevant article: {article.get('title')}")
             return False
@@ -244,7 +267,10 @@ CONTENT:
         category: Optional[str] = None,
         typology: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Retrieves top-matching case studies given a natural-language query."""
+        """
+        Retrieves top-matching case studies given a natural-language architectural project query.
+        Combines SQL metadata filtering with cosine vector similarity ranking.
+        """
         query_vec = np.array(self._get_embedding(query), dtype=np.float32)
         q_norm = np.linalg.norm(query_vec)
         if q_norm > 0:
@@ -271,12 +297,8 @@ CONTENT:
             {where_clause}
         """
 
-        try:
-            with self._get_connection() as conn:
-                rows = conn.execute(sql, params).fetchall()
-        except Exception as e:
-            logger.warning(f"Error querying database: {e}")
-            return []
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
 
         if not rows:
             return []
@@ -302,24 +324,25 @@ CONTENT:
             doc_data["similarity_score"] = round(similarity, 3)
             scored_results.append(doc_data)
 
+        # Sort descending by similarity score
         scored_results.sort(key=lambda x: x["similarity_score"], reverse=True)
         return scored_results[:n_results]
 
     def toggle_bookmark(self, doc_id: str) -> bool:
-        """Toggles bookmark status (1 or 0)."""
-        try:
-            with self._get_connection() as conn:
-                row = conn.execute("SELECT is_bookmarked FROM case_studies WHERE id = ?", (doc_id,)).fetchone()
-                if not row:
-                    return False
-                current = row[0] or 0
-                new_val = 0 if current else 1
-                conn.execute("UPDATE case_studies SET is_bookmarked = ? WHERE id = ?", (new_val, doc_id))
-                conn.commit()
-                return bool(new_val)
-        except Exception as e:
-            logger.warning(f"Failed to toggle bookmark: {e}")
-            return False
+        """
+        Toggles the bookmark status (1 or 0) for a case study.
+        Matches by id or url. Returns the new bookmarked state.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT is_bookmarked, id FROM case_studies WHERE id = ? OR url = ?", (doc_id, doc_id)).fetchone()
+            if not row:
+                return False
+            current = row[0] or 0
+            actual_id = row[1]
+            new_val = 0 if current else 1
+            conn.execute("UPDATE case_studies SET is_bookmarked = ? WHERE id = ?", (new_val, actual_id))
+            conn.commit()
+            return bool(new_val)
 
     def get_bookmarked(self) -> List[Dict[str, Any]]:
         """Returns all shortlisted/bookmarked case studies."""
@@ -331,13 +354,9 @@ CONTENT:
             WHERE is_bookmarked = 1
             ORDER BY rowid DESC
         """
-        try:
-            with self._get_connection() as conn:
-                rows = conn.execute(sql).fetchall()
-                return [dict(r) for r in rows]
-        except Exception as e:
-            logger.warning(f"Error getting bookmarked: {e}")
-            return []
+        with self._get_connection() as conn:
+            rows = conn.execute(sql).fetchall()
+            return [dict(r) for r in rows]
 
     def get_total_count(self) -> int:
         """Returns total number of indexed case studies."""
@@ -349,7 +368,9 @@ CONTENT:
             return 0
 
     def get_all_recent(self, limit: int = 60, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Retrieves recent indexed articles, optionally filtered by category."""
+        """
+        Retrieves recent indexed articles, optionally filtered by category.
+        """
         params = []
         where_clause = ""
         if category and category != "ALL":

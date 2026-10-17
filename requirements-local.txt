@@ -1,0 +1,4 @@
+# Local Development & Streamlit Workstation Dependencies
+-r requirements.txt
+streamlit>=1.38.0
+rich>=13.7.0
