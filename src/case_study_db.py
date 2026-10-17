@@ -288,8 +288,12 @@ CONTENT:
             try:
                 emb_vec = np.array(json.loads(emb_str), dtype=np.float32)
                 d_norm = np.linalg.norm(emb_vec)
-                if d_norm > 0 and q_norm > 0:
+                if d_norm > 0 and q_norm > 0 and len(query_vec) == len(emb_vec):
                     similarity = float(np.dot(query_vec, emb_vec) / (q_norm * d_norm))
+                elif d_norm > 0 and len(emb_vec) == 128:
+                    q_sub = np.array(self._offline_vectorize(query), dtype=np.float32)
+                    qs_norm = np.linalg.norm(q_sub)
+                    similarity = float(np.dot(q_sub, emb_vec) / (qs_norm * d_norm)) if qs_norm > 0 else 0.5
                 else:
                     similarity = 0.5
             except Exception:
