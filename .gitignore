@@ -18,10 +18,9 @@ htmlcov/
 .env.local
 *.env
 
-# Local ChromaDB / SQLite Vector Store & Caches
-data/case_studies_db/
-*.db
-*.sqlite3
+# Local Vector Store (allow pre-populated sqlite3 database for Vercel deployment)
+!data/case_studies_db/case_studies.sqlite3
+data/case_studies_db/*.tmp
 
 # Streamlit logs & cache
 .streamlit/

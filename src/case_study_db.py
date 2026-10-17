@@ -1,23 +1,6 @@
 """
 Module: src/case_study_db.py
 Purpose: Persistent SQLite + Vector Embedding Case Study Retrieval Engine.
-
-Architectural Design Notes for AI Engineering:
----------------------------------------------
-1. Why Vector Embeddings for Architecture?
-   Architects search using descriptive, conceptual language:
-   "Hospitality project in a humid coastal climate using sustainable timber and perforated brick"
-   Traditional keyword search fails when an article discusses "resorts", "tropical shores", "CLT mass timber",
-   and "porous terracotta screens". Vector embeddings map both the user's prompt and the articles
-   into an n-dimensional geometric space where conceptual similarity translates directly to vector proximity.
-2. Production SQLite + Dense Vector Search:
-   Using SQLite with NumPy vector similarity offers distinct enterprise advantages:
-   - Zero compilation overhead: Standard library SQLite requires no external C++ toolchains on Windows.
-   - Atomic persistence: All case study records and embeddings reside in `data/case_studies_db/case_studies.sqlite3`.
-   - Hybrid Filtering: Combines hard SQL filters (`category`, `typology`) with dense semantic ranking.
-3. Offline & Online Embedding Support:
-   When `GEMINI_API_KEY` is provided, high-dimensional embeddings are generated via Google GenAI's
-   `text-embedding-004`. In offline/test mode, an intelligent fallback vectorizer allows local testing.
 """
 
 import os
@@ -36,14 +19,36 @@ DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data" / "case_studies
 DEFAULT_DB_PATH = DEFAULT_DB_DIR / "case_studies.sqlite3"
 
 
+def _resolve_db_path(custom_path: Optional[Path] = None) -> Path:
+    if custom_path:
+        return custom_path
+    
+    # If on Vercel serverless environment, copy packaged database to writable /tmp
+    if os.environ.get("VERCEL") == "1":
+        tmp_db = Path("/tmp/case_studies.sqlite3")
+        if not tmp_db.exists() and DEFAULT_DB_PATH.exists():
+            try:
+                import shutil
+                shutil.copyfile(str(DEFAULT_DB_PATH), str(tmp_db))
+                logger.info("Copied packaged SQLite database to /tmp/case_studies.sqlite3 for Vercel")
+            except Exception as e:
+                logger.warning(f"Failed to copy DB to /tmp: {e}")
+        return tmp_db
+        
+    return DEFAULT_DB_PATH
+
+
 class CaseStudyDatabase:
     """
     Manages persistent indexing and semantic retrieval of architectural precedents in SQLite.
     """
 
     def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or DEFAULT_DB_PATH
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = _resolve_db_path(db_path)
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
 
         self._init_db()
 
@@ -67,37 +72,67 @@ class CaseStudyDatabase:
 
     def _init_db(self):
         """Creates the case studies table and indexes if not already present."""
-        with self._get_connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS case_studies (
-                    id TEXT PRIMARY KEY,
-                    url TEXT UNIQUE,
-                    title TEXT NOT NULL,
-                    source_name TEXT,
-                    publish_date TEXT,
-                    category TEXT,
-                    architect_or_manufacturer TEXT,
-                    project_typology TEXT,
-                    climate_or_location TEXT,
-                    materials_used TEXT,
-                    bullet_1 TEXT,
-                    bullet_2 TEXT,
-                    bullet_3 TEXT,
-                    document_text TEXT,
-                    embedding TEXT,
-                    is_bookmarked INTEGER DEFAULT 0
-                )
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_category ON case_studies(category)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_typology ON case_studies(project_typology)")
-            
-            # Safe column migration for existing tables
-            try:
-                conn.execute("ALTER TABLE case_studies ADD COLUMN is_bookmarked INTEGER DEFAULT 0")
-            except Exception:
-                pass  # Column already exists
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS case_studies (
+                        id TEXT PRIMARY KEY,
+                        url TEXT UNIQUE,
+                        title TEXT NOT NULL,
+                        source_name TEXT,
+                        publish_date TEXT,
+                        category TEXT,
+                        architect_or_manufacturer TEXT,
+                        project_typology TEXT,
+                        climate_or_location TEXT,
+                        materials_used TEXT,
+                        bullet_1 TEXT,
+                        bullet_2 TEXT,
+                        bullet_3 TEXT,
+                        document_text TEXT,
+                        embedding TEXT,
+                        is_bookmarked INTEGER DEFAULT 0
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_category ON case_studies(category)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_typology ON case_studies(project_typology)")
                 
-            conn.commit()
+                # Safe column migration for existing tables
+                try:
+                    conn.execute("ALTER TABLE case_studies ADD COLUMN is_bookmarked INTEGER DEFAULT 0")
+                except Exception:
+                    pass  # Column already exists
+
+                # Auto-seed from data/seed_case_studies.json if database is empty (e.g. freshly booted on Vercel)
+                try:
+                    count = conn.execute("SELECT COUNT(*) FROM case_studies").fetchone()[0]
+                    if count == 0:
+                        seed_path = Path(__file__).resolve().parent.parent / "data" / "seed_case_studies.json"
+                        if seed_path.exists():
+                            with open(seed_path, "r", encoding="utf-8") as f:
+                                seed_data = json.load(f)
+                            for row in seed_data:
+                                conn.execute("""
+                                    INSERT OR REPLACE INTO case_studies (
+                                        id, url, title, source_name, publish_date, category,
+                                        architect_or_manufacturer, project_typology, climate_or_location,
+                                        materials_used, bullet_1, bullet_2, bullet_3, document_text, embedding, is_bookmarked
+                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """, (
+                                    row.get("id"), row.get("url"), row.get("title"), row.get("source_name"),
+                                    row.get("publish_date"), row.get("category"), row.get("architect_or_manufacturer"),
+                                    row.get("project_typology"), row.get("climate_or_location"), row.get("materials_used"),
+                                    row.get("bullet_1"), row.get("bullet_2"), row.get("bullet_3"), row.get("document_text"),
+                                    row.get("embedding"), row.get("is_bookmarked", 0)
+                                ))
+                            conn.commit()
+                            logger.info(f"Auto-seeded {len(seed_data)} verified precedents from seed JSON")
+                except Exception as seed_err:
+                    logger.debug(f"Auto-seeding check skipped: {seed_err}")
+                    
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Could not initialize or migrate schema (might be read-only): {e}")
 
     def _get_embedding(self, text: str) -> List[float]:
         """
@@ -120,7 +155,6 @@ class CaseStudyDatabase:
                 logger.warning(f"GenAI embedding error: {e}. Falling back to local vectorizer.")
 
         # Offline deterministic fallback vectorizer (dimension 128)
-        # Allows full testing of cosine ranking without active API key
         return self._offline_vectorize(text)
 
     def _offline_vectorize(self, text: str, dim: int = 128) -> List[float]:
@@ -136,9 +170,7 @@ class CaseStudyDatabase:
         return vec.tolist()
 
     def index_article(self, article: Dict[str, Any], triage_result: Any) -> bool:
-        """
-        Indexes a verified article and its structured metadata into SQLite.
-        """
+        """Indexes a verified article and its structured metadata into SQLite."""
         if not getattr(triage_result, "is_relevant", True):
             logger.info(f"Skipping indexing for irrelevant article: {article.get('title')}")
             return False
@@ -212,10 +244,7 @@ CONTENT:
         category: Optional[str] = None,
         typology: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Retrieves top-matching case studies given a natural-language architectural project query.
-        Combines SQL metadata filtering with cosine vector similarity ranking.
-        """
+        """Retrieves top-matching case studies given a natural-language query."""
         query_vec = np.array(self._get_embedding(query), dtype=np.float32)
         q_norm = np.linalg.norm(query_vec)
         if q_norm > 0:
@@ -242,8 +271,12 @@ CONTENT:
             {where_clause}
         """
 
-        with self._get_connection() as conn:
-            rows = conn.execute(sql, params).fetchall()
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(sql, params).fetchall()
+        except Exception as e:
+            logger.warning(f"Error querying database: {e}")
+            return []
 
         if not rows:
             return []
@@ -265,24 +298,24 @@ CONTENT:
             doc_data["similarity_score"] = round(similarity, 3)
             scored_results.append(doc_data)
 
-        # Sort descending by similarity score
         scored_results.sort(key=lambda x: x["similarity_score"], reverse=True)
         return scored_results[:n_results]
 
     def toggle_bookmark(self, doc_id: str) -> bool:
-        """
-        Toggles the bookmark status (1 or 0) for a case study.
-        Returns the new bookmarked state.
-        """
-        with self._get_connection() as conn:
-            row = conn.execute("SELECT is_bookmarked FROM case_studies WHERE id = ?", (doc_id,)).fetchone()
-            if not row:
-                return False
-            current = row[0] or 0
-            new_val = 0 if current else 1
-            conn.execute("UPDATE case_studies SET is_bookmarked = ? WHERE id = ?", (new_val, doc_id))
-            conn.commit()
-            return bool(new_val)
+        """Toggles bookmark status (1 or 0)."""
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute("SELECT is_bookmarked FROM case_studies WHERE id = ?", (doc_id,)).fetchone()
+                if not row:
+                    return False
+                current = row[0] or 0
+                new_val = 0 if current else 1
+                conn.execute("UPDATE case_studies SET is_bookmarked = ? WHERE id = ?", (new_val, doc_id))
+                conn.commit()
+                return bool(new_val)
+        except Exception as e:
+            logger.warning(f"Failed to toggle bookmark: {e}")
+            return False
 
     def get_bookmarked(self) -> List[Dict[str, Any]]:
         """Returns all shortlisted/bookmarked case studies."""
@@ -294,9 +327,13 @@ CONTENT:
             WHERE is_bookmarked = 1
             ORDER BY rowid DESC
         """
-        with self._get_connection() as conn:
-            rows = conn.execute(sql).fetchall()
-            return [dict(r) for r in rows]
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(sql).fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(f"Error getting bookmarked: {e}")
+            return []
 
     def get_total_count(self) -> int:
         """Returns total number of indexed case studies."""
@@ -306,3 +343,30 @@ CONTENT:
                 return res[0] if res else 0
         except Exception:
             return 0
+
+    def get_all_recent(self, limit: int = 60, category: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieves recent indexed articles, optionally filtered by category."""
+        params = []
+        where_clause = ""
+        if category and category != "ALL":
+            where_clause = "WHERE category = ?"
+            params.append(category)
+
+        sql = f"""
+            SELECT id, url, title, source_name, publish_date, category,
+                   architect_or_manufacturer, project_typology, climate_or_location,
+                   materials_used, bullet_1, bullet_2, bullet_3, is_bookmarked
+            FROM case_studies
+            {where_clause}
+            ORDER BY rowid DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(sql, params).fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(f"Error fetching recent articles: {e}")
+            return []

@@ -1,23 +1,11 @@
 """
 Module: src/dossier_generator.py
 Purpose: Future Project Case Study Dossier Synthesizer & DOCX/MD Exporter.
-
-Architectural Design Notes for AI Engineering:
----------------------------------------------
-1. Zero-Hallucination Citation Constraint:
-   Architectural research demands absolute factual fidelity. When an architect presents
-   precedents to clients or planning authorities, every reference must correspond to
-   a verified built work or lab-tested material. The LLM is strictly constrained to synthesize
-   its narrative ONLY from the retrieved database records. Invented projects or dead links
-   are structurally prevented.
-2. Production DOCX & Markdown Dual-Output:
-   - Microsoft Word (.docx): Formatted for client presentations, studio reviews, and reports
-     with styled tables, typographies, callouts, and active hyperlinks.
-   - GitHub Markdown (.md): Version-controlled, searchable, and human-readable repository artifact.
 """
 
 import os
 import re
+import io
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -37,13 +25,24 @@ from src.case_study_db import CaseStudyDatabase
 load_dotenv()
 logger = logging.getLogger("ArchIntel.Dossier")
 
-EXPORTS_DIR = Path(__file__).resolve().parent.parent / "exports"
+
+def _resolve_exports_dir() -> Path:
+    if os.environ.get("VERCEL") == "1":
+        p = Path("/tmp/exports")
+    else:
+        p = Path(__file__).resolve().parent.parent / "exports"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return p
+
+
+EXPORTS_DIR = _resolve_exports_dir()
 
 
 def add_hyperlink(paragraph, url: str, text: str, color: str = "1E3A8A", underline: bool = True):
-    """
-    Inserts a clickable hyperlink into a python-docx paragraph.
-    """
+    """Inserts a clickable hyperlink into a python-docx paragraph."""
     try:
         part = paragraph.part
         r_id = part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
@@ -70,15 +69,30 @@ def set_cell_background(cell, fill_hex: str):
     tcPr.append(shd)
 
 
+def set_cell_margins(cell, top=100, bottom=100, left=150, right=150):
+    """Sets inner padding for a table cell in dxa (1/20th pt)."""
+    tcPr = cell._tc.get_or_add_tcPr()
+    tcMar = OxmlElement('w:tcMar')
+    for m, val in [('top', top), ('bottom', bottom), ('left', left), ('right', right)]:
+        node = OxmlElement(f'w:{m}')
+        node.set(qn('w:w'), str(val))
+        node.set(qn('w:type'), 'dxa')
+        tcMar.append(node)
+    tcPr.append(tcMar)
+
+
 class DossierGenerator:
     """
-    Synthesizes custom architectural project dossiers from verified database precedents.
+    Synthesizes executive Architectural Case Study & Material Precedent Dossiers.
     """
 
     def __init__(self, db: Optional[CaseStudyDatabase] = None, exports_dir: Optional[Path] = None):
         self.db = db or CaseStudyDatabase()
         self.exports_dir = exports_dir or EXPORTS_DIR
-        self.exports_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.exports_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
 
         self.api_key = os.getenv("GEMINI_API_KEY")
         self.model_name = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
@@ -90,7 +104,7 @@ class DossierGenerator:
                 self.client = genai.Client(api_key=self.api_key)
                 logger.info(f"Dossier generator initialized with Gemini model: {self.model_name}")
             except Exception as e:
-                logger.warning(f"Could not connect Gemini client for dossier: {e}")
+                logger.warning(f"Could not connect Gemini client for dossier synthesis: {e}")
 
     def generate_dossier(
         self,
@@ -99,15 +113,9 @@ class DossierGenerator:
         category: Optional[str] = None,
         typology: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        End-to-end dossier creation:
-        1. Query database for nearest verified case studies.
-        2. Synthesize structured analysis via Gemini with strict citation bounds.
-        3. Export formatted DOCX and MD documents.
-        """
+        """Synthesizes a Case Study & Material Precedent Dossier."""
         logger.info(f"Synthesizing Case Study Dossier for brief: '{project_brief[:60]}...'")
 
-        # 1. Retrieve verified precedents from SQLite vector database
         precedents = self.db.search_case_studies(
             query=project_brief,
             n_results=top_k,
@@ -123,10 +131,8 @@ class DossierGenerator:
                 "precedents": []
             }
 
-        # 2. AI Synthesis with Strict Zero-Hallucination Citation Constraints
         synthesis_text = self._synthesize_analysis(project_brief, precedents)
 
-        # 3. Export to Markdown and DOCX
         timestamp_str = datetime.now().strftime("%Y-%m-%d")
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", project_brief[:30].strip()).strip("-").lower()
         if not slug:
@@ -135,14 +141,19 @@ class DossierGenerator:
         md_file = self.exports_dir / f"{timestamp_str}-{slug}-dossier.md"
         docx_file = self.exports_dir / f"{timestamp_str}-{slug}-dossier.docx"
 
-        # Save Markdown
-        with open(md_file, "w", encoding="utf-8") as f:
-            f.write(synthesis_text)
+        docx_buffer = io.BytesIO()
+        self._build_docx(project_brief, precedents, synthesis_text, docx_buffer)
+        docx_bytes = docx_buffer.getvalue()
 
-        # Build DOCX
-        self._build_docx(project_brief, precedents, synthesis_text, docx_file)
+        try:
+            with open(md_file, "w", encoding="utf-8") as f:
+                f.write(synthesis_text)
+            with open(docx_file, "wb") as f:
+                f.write(docx_bytes)
+            logger.info(f"Dossier generated successfully: {docx_file.name} and {md_file.name}")
+        except Exception as e:
+            logger.warning(f"Could not write dossier to disk (read-only filesystem): {e}")
 
-        logger.info(f"Dossier generated successfully: {docx_file.name} and {md_file.name}")
         return {
             "success": True,
             "project_brief": project_brief,
@@ -151,7 +162,8 @@ class DossierGenerator:
             "docx_path": str(docx_file),
             "md_path": str(md_file),
             "docx_filename": docx_file.name,
-            "md_filename": md_file.name
+            "md_filename": md_file.name,
+            "docx_bytes": docx_bytes
         }
 
     def _synthesize_analysis(self, brief: str, precedents: List[Dict[str, Any]]) -> str:
@@ -212,21 +224,24 @@ You are preparing an authoritative **Architectural Case Study & Material Precede
         if not self.client:
             return self._offline_synthesis_fallback(brief, precedents)
 
-        try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config={"temperature": 0.2}
-            )
-            if response.text:
-                return response.text
-            return self._offline_synthesis_fallback(brief, precedents)
-        except Exception as e:
-            logger.error(f"Error calling Gemini for dossier synthesis: {e}")
-            return self._offline_synthesis_fallback(brief, precedents)
+        models_to_try = [self.model_name, "gemini-2.5-flash", "gemini-1.5-flash"]
+        for m in models_to_try:
+            try:
+                response = self.client.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config={"temperature": 0.2}
+                )
+                if response.text:
+                    logger.info(f"Synthesized dossier using model: {m}")
+                    return response.text
+            except Exception as e:
+                logger.warning(f"Model {m} failed: {e}. Trying next fallback...")
+
+        return self._offline_synthesis_fallback(brief, precedents)
 
     def _offline_synthesis_fallback(self, brief: str, precedents: List[Dict[str, Any]]) -> str:
-        """Deterministic fallback when Gemini client is offline."""
+        """Deterministic fallback when Gemini client is offline or rate-limited."""
         date_str = datetime.now().strftime("%B %d, %Y")
         lines = [
             f"# Architectural Case Study & Material Precedent Dossier",
@@ -241,12 +256,11 @@ You are preparing an authoritative **Architectural Case Study & Material Precede
         ]
 
         for p in precedents:
-            takeaway = p.get("bullet_1") or "Verified architectural precedent."
-            clean_takeaway = takeaway.replace("|", "/")
+            takeaway = p.get("bullet_1") or p.get("bullet_2") or "Documented precedent."
             lines.append(
-                f"| [{p['title']}]({p['url']}) | {p.get('architect_or_manufacturer', 'N/A')} | "
+                f"| {p['title']} | {p.get('architect_or_manufacturer', 'N/A')} | "
                 f"{p.get('project_typology', 'General')} ({p.get('climate_or_location', 'Global')}) | "
-                f"{clean_takeaway} | [View Source]({p['url']}) |"
+                f"{takeaway[:100]} | [Source Link]({p['url']}) |"
             )
 
         lines.extend([
@@ -272,40 +286,37 @@ You are preparing an authoritative **Architectural Case Study & Material Precede
         brief: str,
         precedents: List[Dict[str, Any]],
         markdown_text: str,
-        output_path: Path
+        output_path: Any
     ):
         """Constructs a polished, formatted Microsoft Word (.docx) document."""
         doc = docx.Document()
 
-        # Set standard margins (1 inch)
         for section in doc.sections:
             section.top_margin = Inches(1.0)
             section.bottom_margin = Inches(1.0)
             section.left_margin = Inches(1.0)
             section.right_margin = Inches(1.0)
 
-        # Document Header
         title_p = doc.add_paragraph()
         title_run = title_p.add_run("ARCHITECTURAL CASE STUDY & MATERIAL PRECEDENT DOSSIER")
         title_run.font.name = "Calibri"
         title_run.font.size = Pt(20)
         title_run.font.bold = True
-        title_run.font.color.rgb = RGBColor(0x1E, 0x3A, 0x8A)  # Navy blue
+        title_run.font.color.rgb = RGBColor(0x1E, 0x3A, 0x8A)
         title_p.paragraph_format.space_after = Pt(4)
 
         subtitle_p = doc.add_paragraph()
         sub_run = subtitle_p.add_run(f"Project Design Research Report | ArchIntel-Agent Knowledge Engine")
         sub_run.font.name = "Calibri"
         sub_run.font.size = Pt(11)
-        sub_run.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)  # Slate grey
+        sub_run.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
         subtitle_p.paragraph_format.space_after = Pt(16)
 
-        # Project Brief Callout Box (1x1 table styled as callout)
         callout_table = doc.add_table(rows=1, cols=1)
         callout_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         cell = callout_table.cell(0, 0)
         cell.width = Inches(6.5)
-        set_cell_background(cell, "F1F5F9")  # Light slate tint
+        set_cell_background(cell, "F1F5F9")
 
         cp = cell.paragraphs[0]
         cp.paragraph_format.space_before = Pt(8)
@@ -319,100 +330,95 @@ You are preparing an authoritative **Architectural Case Study & Material Precede
         c_label.font.bold = True
         c_label.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
-        c_text = cp.add_run(f'"{brief}"\n')
+        c_text = cp.add_run(f'"{brief}"\n\n')
         c_text.font.name = "Calibri"
-        c_text.font.size = Pt(11)
+        c_text.font.size = Pt(10)
         c_text.font.italic = True
+        c_text.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
 
-        c_meta = cp.add_run(f"Date: {datetime.now().strftime('%B %d, %Y')} | Verified Precedents Analyzed: {len(precedents)}")
-        c_meta.font.name = "Calibri"
-        c_meta.font.size = Pt(9)
-        c_meta.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
+        meta_text = cp.add_run(f"Synthesized on: {datetime.now().strftime('%B %d, %Y')} | Verified Precedents Analyzed: {len(precedents)}")
+        meta_text.font.name = "Calibri"
+        meta_text.font.size = Pt(8.5)
+        meta_text.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
 
-        doc.add_paragraph().paragraph_format.space_after = Pt(12)
+        doc.add_paragraph().paragraph_format.space_after = Pt(16)
 
-        # Section 1: Executive Design Strategy
         h1 = doc.add_heading("1. Executive Design Strategy", level=1)
         h1.paragraph_format.space_before = Pt(14)
         h1.paragraph_format.space_after = Pt(6)
 
-        # Extract strategy text from markdown
-        strategy_match = re.search(r"## 1\. Executive Design Strategy\s+(.*?)(?=\n## 2\.|$)", markdown_text, re.DOTALL)
-        if strategy_match:
-            strategy_body = strategy_match.group(1).strip()
-            for para in strategy_body.split("\n\n"):
-                if para.strip():
-                    p = doc.add_paragraph(para.strip())
-                    p.paragraph_format.line_spacing = 1.15
+        strat_match = re.search(r"## 1\. Executive Design Strategy\s+(.*?)(?=\n## 2\.|$)", markdown_text, re.DOTALL)
+        if strat_match:
+            strat_text = strat_match.group(1).strip()
+            for para in strat_text.split("\n\n"):
+                p_clean = para.strip()
+                if p_clean:
+                    p = doc.add_paragraph(p_clean)
                     p.paragraph_format.space_after = Pt(6)
+                    p.paragraph_format.line_spacing = 1.15
         else:
             p = doc.add_paragraph(
-                f"This design dossier synthesizes verified strategies from {len(precedents)} premier architectural case studies. "
-                f"The precedents address spatial layout, climatic suitability, and tectonic specifications tailored to the client's brief."
+                f"This comparative research dossier evaluates {len(precedents)} verified precedents retrieved from "
+                f"authoritative architectural publications directly addressing the project requirements."
             )
             p.paragraph_format.space_after = Pt(6)
 
-        # Section 2: Comparative Precedent Matrix Table
         h2 = doc.add_heading("2. Comparative Precedent Matrix", level=1)
         h2.paragraph_format.space_before = Pt(14)
         h2.paragraph_format.space_after = Pt(6)
 
-        # Create Table
-        matrix_table = doc.add_table(rows=len(precedents) + 1, cols=5)
-        matrix_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        matrix_table.autofit = False
+        table = doc.add_table(rows=1, cols=5)
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        table.autofit = False
 
-        col_widths = [Inches(1.8), Inches(1.2), Inches(1.1), Inches(1.6), Inches(0.8)]
-        headers = ["Project Name", "Lead Studio", "Typology & Climate", "Key Tectonic Takeaway", "Source"]
+        headers = ["Project Name", "Studio / Architect", "Typology & Climate", "Key Tectonic Takeaway", "Verified Source"]
+        col_widths = [Inches(1.5), Inches(1.2), Inches(1.2), Inches(2.0), Inches(0.8)]
 
-        # Style Header Row
-        hdr_row = matrix_table.rows[0]
+        hdr_cells = table.rows[0].cells
         for idx, title in enumerate(headers):
-            cell = hdr_row.cells[idx]
+            cell = hdr_cells[idx]
             cell.width = col_widths[idx]
-            set_cell_background(cell, "1E3A8A")  # Navy Blue
-            hp = cell.paragraphs[0]
-            hp.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            hrun = hp.add_run(title)
-            hrun.font.name = "Calibri"
-            hrun.font.size = Pt(9.5)
-            hrun.font.bold = True
-            hrun.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+            set_cell_background(cell, "1E3A8A")
+            p = cell.paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after = Pt(4)
+            run = p.add_run(title)
+            run.font.name = "Calibri"
+            run.font.size = Pt(9)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
-        # Fill Precedent Rows
-        for r_idx, prec in enumerate(precedents, start=1):
-            row = matrix_table.rows[r_idx]
-            bg_color = "FFFFFF" if r_idx % 2 == 1 else "F8FAFC"
+        for row_idx, prec in enumerate(precedents):
+            row = table.add_row()
+            bg_color = "F8FAFC" if row_idx % 2 == 0 else "FFFFFF"
 
-            # 0: Project Name
             cell_0 = row.cells[0]
             cell_0.width = col_widths[0]
             set_cell_background(cell_0, bg_color)
             p0 = cell_0.paragraphs[0]
             p0_run = p0.add_run(prec["title"])
             p0_run.font.name = "Calibri"
-            p0_run.font.size = Pt(9)
+            p0_run.font.size = Pt(8.5)
             p0_run.font.bold = True
 
-            # 1: Lead Studio
             cell_1 = row.cells[1]
             cell_1.width = col_widths[1]
             set_cell_background(cell_1, bg_color)
             p1 = cell_1.paragraphs[0]
-            p1_run = p1.add_run(prec.get("architect_or_manufacturer", "Studio"))
+            p1_run = p1.add_run(prec.get("architect_or_manufacturer") or "N/A")
             p1_run.font.name = "Calibri"
             p1_run.font.size = Pt(8.5)
 
-            # 2: Typology & Climate
             cell_2 = row.cells[2]
             cell_2.width = col_widths[2]
             set_cell_background(cell_2, bg_color)
             p2 = cell_2.paragraphs[0]
-            p2_run = p2.add_run(f"{prec.get('project_typology', 'General')}\n({prec.get('climate_or_location', 'Global')})")
+            typ_text = f"{prec.get('project_typology', 'General')}\n({prec.get('climate_or_location', 'Global')})"
+            p2_run = p2.add_run(typ_text)
             p2_run.font.name = "Calibri"
-            p2_run.font.size = Pt(8.5)
+            p2_run.font.size = Pt(8)
 
-            # 3: Key Takeaway
             cell_3 = row.cells[3]
             cell_3.width = col_widths[3]
             set_cell_background(cell_3, bg_color)
@@ -422,7 +428,6 @@ You are preparing an authoritative **Architectural Case Study & Material Precede
             p3_run.font.name = "Calibri"
             p3_run.font.size = Pt(8.5)
 
-            # 4: Source Link
             cell_4 = row.cells[4]
             cell_4.width = col_widths[4]
             set_cell_background(cell_4, bg_color)
@@ -431,7 +436,6 @@ You are preparing an authoritative **Architectural Case Study & Material Precede
 
         doc.add_paragraph().paragraph_format.space_after = Pt(12)
 
-        # Section 3: Material & Tectonic Palette Recommendations
         h3 = doc.add_heading("3. Material & Tectonic Palette Recommendations", level=1)
         h3.paragraph_format.space_before = Pt(14)
         h3.paragraph_format.space_after = Pt(6)
@@ -457,7 +461,6 @@ You are preparing an authoritative **Architectural Case Study & Material Precede
                     bp.add_run(f"Specified materials include {mats} (Verified via {p['source_name']}).")
                     bp.paragraph_format.space_after = Pt(4)
 
-        # Section 4: Strict Reference Bibliography
         h4 = doc.add_heading("4. Strict Reference Bibliography", level=1)
         h4.paragraph_format.space_before = Pt(14)
         h4.paragraph_format.space_after = Pt(6)
@@ -476,5 +479,7 @@ You are preparing an authoritative **Architectural Case Study & Material Precede
             add_hyperlink(bp, prec["url"], prec["url"])
             bp.paragraph_format.space_after = Pt(4)
 
-        # Save Document
-        doc.save(str(output_path))
+        if isinstance(output_path, (str, Path)):
+            doc.save(str(output_path))
+        else:
+            doc.save(output_path)

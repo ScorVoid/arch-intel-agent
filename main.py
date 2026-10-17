@@ -27,6 +27,12 @@ from src.ai_triage import AITriageEngine
 from src.case_study_db import CaseStudyDatabase
 from src.digest_builder import DailyDigestBuilder
 
+# Vercel ASGI Application Compatibility Export
+try:
+    from api.index import app
+except Exception:
+    app = None
+
 # Configure clean logging
 logging.basicConfig(
     level=logging.INFO,
@@ -64,36 +70,33 @@ def run_pipeline(max_per_source: int = 3, skip_indexing: bool = False):
 
     for idx, article in enumerate(raw_articles, 1):
         logger.info(f"Analyzing [{idx}/{len(raw_articles)}]: {article.get('title')[:60]}...")
-        analysis = triage_engine.triage_article(article)
-        triaged_items.append({
-            "article": article,
-            "analysis": analysis
-        })
+        result = triage_engine.triage_article(article)
+        triaged_items.append({"article": article, "analysis": result})
 
-    # 3. Vector Knowledge Base Indexing Phase
+    # 3. Persistent Case Study Indexing Phase
     if not skip_indexing:
-        logger.info("PHASE 3: Indexing verified case studies into ChromaDB vector store...")
+        logger.info("PHASE 3: Indexing verified precedents into SQLite Vector Database...")
         db = CaseStudyDatabase()
         indexed_count = 0
         for item in triaged_items:
-            success = db.index_article(item["article"], item["analysis"])
-            if success:
+            if db.index_article(item["article"], item["analysis"]):
                 indexed_count += 1
         logger.info(f"Indexed {indexed_count} verified case studies into ChromaDB. Total in DB: {db.get_total_count()}")
     else:
-        logger.info("PHASE 3: Skipped ChromaDB indexing as requested.")
+        logger.info("PHASE 3: Skipping ChromaDB vector indexing (--skip-indexing set).")
 
     # 4. Daily Digest Generation Phase
     logger.info("PHASE 4: Building 3-part Daily Digest Markdown Brief...")
     builder = DailyDigestBuilder()
-    report_file = builder.generate_digest(triaged_items, run_date=start_time)
-    logger.info(f"Daily Digest generated successfully at: {report_file}")
+    report_path = builder.generate_digest(triaged_items, run_date=start_time)
+    logger.info(f"Daily Digest generated successfully at: {report_path}")
 
-    elapsed = (datetime.now() - start_time).total_seconds()
+    # Summary
+    duration = (datetime.now() - start_time).total_seconds()
     print("\n" + "=" * 70)
     print("✨ Pipeline Complete!")
-    print(f"📄 Report: {report_file}")
-    print(f"⏱️  Duration: {elapsed:.2f} seconds")
+    print(f"📄 Report: {report_path}")
+    print(f"⏱️  Duration: {duration:.2f} seconds")
     print("=" * 70 + "\n")
 
 

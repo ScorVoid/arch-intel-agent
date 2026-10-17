@@ -1,28 +1,31 @@
 """
 Module: src/digest_builder.py
 Purpose: Generates structured, executive 3-part Markdown Daily Briefs.
-
-Architectural Design Notes for AI Engineering:
----------------------------------------------
-1. Clear Hierarchical Information Architecture:
-   Designers and project architects scan digests quickly. Articles are strictly
-   partitioned into the 3 operational categories:
-     - Section 1: Architectural News (Civic, Residential, Masterplans, Structures)
-     - Section 2: Interior News (Spatial, Hospitality, Retail, Lighting)
-     - Section 3: Newly Launched Material News (Surfaces, Composites, Facades)
-2. Traceable Attribution:
-   Every item links directly to its verified publication URL and attributes the
-   architect, studio, or manufacturer.
 """
 
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from src.ai_triage import NewsCategory
 
-REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
+
+def _resolve_reports_dir(custom_path: Optional[Path] = None) -> Path:
+    if custom_path:
+        return custom_path
+    if os.environ.get("VERCEL") == "1":
+        p = Path("/tmp/reports")
+    else:
+        p = Path(__file__).resolve().parent.parent / "reports"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return p
+
+
+REPORTS_DIR = _resolve_reports_dir()
 
 
 class DailyDigestBuilder:
@@ -30,26 +33,19 @@ class DailyDigestBuilder:
     Assembles triaged architectural intelligence into production-grade Markdown briefs.
     """
 
-    def __init__(self, reports_dir: Path = REPORTS_DIR):
-        self.reports_dir = reports_dir
-        self.reports_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, reports_dir: Optional[Path] = None):
+        self.reports_dir = _resolve_reports_dir(reports_dir)
 
     def generate_digest(
         self,
         triaged_items: List[Dict[str, Any]],
         run_date: datetime = None
     ) -> Path:
-        """
-        Builds and saves the daily markdown brief.
-        `triaged_items` is a list of tuples or dicts containing:
-          - article: dict (title, url, source_name, publish_date)
-          - analysis: ArticleTriageResult
-        """
+        """Builds and saves the daily markdown brief."""
         date_obj = run_date or datetime.now()
         date_str = date_obj.strftime("%Y-%m-%d")
         file_path = self.reports_dir / f"{date_str}-daily-brief.md"
 
-        # Separate items into the 3 core buckets
         arch_news = []
         interior_news = []
         material_news = []
@@ -61,115 +57,99 @@ class DailyDigestBuilder:
                 rejected_count += 1
                 continue
 
-            category = getattr(analysis, "category", "")
-            cat_val = category.value if hasattr(category, "value") else str(category)
+            category = getattr(analysis, "category", None)
+            cat_value = category.value if hasattr(category, "value") else str(category)
 
-            if cat_val == NewsCategory.ARCHITECTURAL_NEWS.value:
+            if cat_value == NewsCategory.ARCHITECTURAL_NEWS.value:
                 arch_news.append(item)
-            elif cat_val == NewsCategory.INTERIOR_NEWS.value:
+            elif cat_value == NewsCategory.INTERIOR_NEWS.value:
                 interior_news.append(item)
-            elif cat_val == NewsCategory.MATERIAL_LAUNCH_NEWS.value:
+            elif cat_value == NewsCategory.MATERIAL_LAUNCH_NEWS.value:
                 material_news.append(item)
             else:
                 arch_news.append(item)
 
-        total_relevant = len(arch_news) + len(interior_news) + len(material_news)
+        total_verified = len(arch_news) + len(interior_news) + len(material_news)
 
-        # Markdown Document Generation
         lines = [
             f"# ArchIntel-Agent Daily Intelligence Brief",
-            f"**Date:** {date_obj.strftime('%B %d, %Y')} | **Pipeline Status:** Verified Verified Sources Only",
-            f"",
-            f"> Executive Architectural & Material Intelligence compiled from verified global publications.",
-            f"",
+            f"**Date:** {date_obj.strftime('%B %d, %Y')} | **Pipeline Status:** Verified Verified Sources Only\n",
+            f"> Executive Architectural & Material Intelligence compiled from verified global publications.\n",
             f"### Executive Pipeline Metrics",
-            f"- **Verified Curated Items:** {total_relevant}",
+            f"- **Verified Curated Items:** {total_verified}",
             f"- **Architectural Innovations:** {len(arch_news)}",
             f"- **Spatial & Interior Design:** {len(interior_news)}",
             f"- **Newly Launched Materials:** {len(material_news)}",
-            f"- **Off-Topic / Ads Filtered Out:** {rejected_count}",
-            f"",
-            f"---",
-            f"",
+            f"- **Off-Topic / Ads Filtered Out:** {rejected_count}\n",
+            f"---\n",
             f"## 1. Architectural News",
-            f"*Structures, civic & cultural developments, masterplans, and structural engineering feats.*",
-            f""
+            f"*Structures, civic & cultural developments, masterplans, and structural engineering feats.*\n"
         ]
 
         if not arch_news:
-            lines.append("_No major verified architectural items captured in this cycle._\n")
+            lines.append("_No verified architectural projects in this cycle._\n")
         else:
-            for item in arch_news:
-                lines.extend(self._format_article_markdown(item))
+            for it in arch_news:
+                lines.append(self._format_article_entry(it["article"], it["analysis"]))
 
         lines.extend([
-            f"---",
-            f"",
+            f"---\n",
             f"## 2. Interior News",
-            f"*Spatial design, hospitality, residential interiors, lighting design, and acoustic environments.*",
-            f""
+            f"*Spatial design, hospitality, residential interiors, lighting design, and acoustic environments.*\n"
         ])
 
         if not interior_news:
-            lines.append("_No major verified interior items captured in this cycle._\n")
+            lines.append("_No verified interior spaces in this cycle._\n")
         else:
-            for item in interior_news:
-                lines.extend(self._format_article_markdown(item))
+            for it in interior_news:
+                lines.append(self._format_article_entry(it["article"], it["analysis"]))
 
         lines.extend([
-            f"---",
-            f"",
+            f"---\n",
             f"## 3. Newly Launched Material News",
-            f"*Engineered surfaces, bio-based composites, facade technologies, and sustainable material breakthroughs.*",
-            f""
+            f"*Engineered surfaces, bio-based composites, facade technologies, and sustainable material breakthroughs.*\n"
         ])
 
         if not material_news:
-            lines.append("_No major verified material launches captured in this cycle._\n")
+            lines.append("_No newly launched materials in this cycle._\n")
         else:
-            for item in material_news:
-                lines.extend(self._format_article_markdown(item))
+            for it in material_news:
+                lines.append(self._format_article_entry(it["article"], it["analysis"]))
 
         lines.extend([
-            f"---",
-            f"*Report auto-generated by [ArchIntel-Agent](https://github.com/ScorVoid/arch-intel-agent). All sources vetted via strict domain whitelist.*"
+            f"---\n",
+            f"*Report auto-generated by [ArchIntel-Agent](https://github.com/ScorVoid/arch-intel-agent). All sources vetted via strict domain whitelist.*\n"
         ])
 
-        markdown_content = "\n".join(lines)
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(markdown_content)
+        content = "\n".join(lines)
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception:
+            pass
 
         return file_path
 
-    def _format_article_markdown(self, item: Dict[str, Any]) -> List[str]:
-        """Formats an individual article entry into structured Markdown."""
-        art = item.get("article", {})
-        analysis = item.get("analysis")
+    def _format_article_entry(self, article: Dict[str, Any], analysis: Any) -> str:
+        title = article.get("title", "Untitled")
+        url = article.get("url", "#")
+        source = article.get("source_name", "Unknown Source")
 
-        title = art.get("title", "Untitled Project")
-        url = art.get("url", "#")
-        source = art.get("source_name", "Publication")
-        date_str = art.get("publish_date", "")
-
-        architect = getattr(analysis, "architect_or_manufacturer", "Not specified")
-        typology = getattr(analysis, "project_typology", "General")
-        climate = getattr(analysis, "climate_or_location", "Global")
-        materials = getattr(analysis, "materials_used", [])
-        materials_badge = ", ".join(f"`{m}`" for m in materials) if materials else "`Specified on site`"
+        architect = getattr(analysis, "architect_or_manufacturer", "Studio / Architect") or "Studio / Architect"
+        typology = getattr(analysis, "project_typology", "Mixed / Contemporary") or "Mixed / Contemporary"
+        climate = getattr(analysis, "climate_or_location", "Global") or "Global"
+        materials = getattr(analysis, "materials_used", []) or []
 
         bullets = getattr(analysis, "three_bullet_summary", [])
+        bullet_lines = "\n".join([f"- {b}" for b in bullets if b])
 
-        lines = [
-            f"### [{title}]({url})",
-            f"**Source:** {source} | **Studio / Manufacturer:** {architect} | **Typology:** {typology}",
-            f"**Location / Climate:** {climate}",
-            f"**Materials Identified:** {materials_badge}",
-            f"",
-            f"**Key Takeaways:**"
-        ]
+        materials_str = ", ".join([f"`{m}`" for m in materials]) if materials else "`Specified on site`"
 
-        for b in bullets:
-            lines.append(f"- {b}")
+        return f"""### [{title}]({url})
+**Source:** {source} | **Studio / Manufacturer:** {architect} | **Typology:** {typology}
+**Location / Climate:** {climate}
+**Materials Identified:** {materials_str}
 
-        lines.append("")  # Blank spacing
-        return lines
+**Key Takeaways:**
+{bullet_lines}
+"""
