@@ -1,7 +1,12 @@
 """
 File: app.py
-Purpose: Streamlit Interactive UI for ArchIntel-Agent.
-Provides a daily intelligence feed browser and a semantic case study retrieval engine.
+Purpose: Streamlit Studio Workstation for ArchIntel-Agent.
+Features:
+- Semantic Case Study & Material Precedent Research Engine
+- 1-Click Client-Ready Word (.docx) & Markdown Dossier Synthesizer
+- Saved Project Bookmarks & Precedent Shortlist (SQLite persistence)
+- 3-Part Daily Architectural Intelligence Brief Explorer
+- Pipeline Sync & Live Ingestion Trigger
 """
 
 import os
@@ -20,12 +25,13 @@ from src.case_study_db import CaseStudyDatabase
 from src.ingestor import FeedIngestor
 from src.ai_triage import AITriageEngine, NewsCategory
 from src.digest_builder import DailyDigestBuilder
+from src.dossier_generator import DossierGenerator
 
 load_dotenv()
 
 # Streamlit Page Config
 st.set_page_config(
-    page_title="ArchIntel-Agent | Architectural Intelligence",
+    page_title="ArchIntel Studio | Architectural Design Workstation",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -79,6 +85,14 @@ st.markdown("""
         margin-right: 4px;
         margin-top: 4px;
     }
+    .dossier-box {
+        background: rgba(30, 58, 138, 0.15);
+        border: 1px solid rgba(147, 197, 253, 0.3);
+        border-radius: 10px;
+        padding: 20px;
+        margin-top: 24px;
+        margin-bottom: 24px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -93,131 +107,279 @@ def get_ingestor():
     return FeedIngestor()
 
 
+@st.cache_resource
+def get_dossier_gen():
+    return DossierGenerator()
+
+
 db = get_db()
 ingestor = get_ingestor()
+dossier_gen = get_dossier_gen()
 
 # --- Sidebar ---
 with st.sidebar:
-    st.title("🏛️ ArchIntel-Agent")
-    st.caption("Automated Architectural & Material Intelligence")
+    st.title("🏛️ ArchIntel Studio")
+    st.caption("Architectural & Material Design Research Workstation")
 
     st.markdown("---")
-    st.subheader("System Status")
+    st.subheader("Knowledge Base Status")
     
     total_indexed = db.get_total_count()
-    st.metric(label="Case Studies Indexed", value=total_indexed)
+    bookmarked_count = len(db.get_bookmarked())
+    
+    col_sb1, col_sb2 = st.columns(2)
+    with col_sb1:
+        st.metric(label="Total Indexed", value=total_indexed)
+    with col_sb2:
+        st.metric(label="Shortlisted", value=bookmarked_count)
 
     api_key = os.getenv("GEMINI_API_KEY")
     if api_key and api_key != "YOUR_GEMINI_API_KEY_HERE":
-        st.success("🟢 Gemini API: Active")
-        st.caption(f"Model: `{os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')}`")
+        st.success("🟢 Gemini Inference: Active")
+        st.caption(f"Reasoning: `{os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')}`")
+        st.caption(f"Vectors: `{os.getenv('GEMINI_EMBEDDING_MODEL', 'gemini-embedding-001')}`")
     else:
         st.warning("🟡 Gemini API: Inactive (Using Offline Mode)")
-        st.caption("Add key to `.env` for AI inference.")
 
     st.markdown("---")
-    st.subheader("Whitelisted Publications")
+    st.subheader("Curated Publications")
     for src in ingestor.sources:
         status_icon = "✅" if src.get("enabled") else "⚪"
         st.markdown(f"{status_icon} **{src['name']}**  \n<small>{src.get('category_hint')}</small>", unsafe_allow_html=True)
 
 
-# --- Main Tabs ---
-tab_finder, tab_daily, tab_trigger = st.tabs([
-    "🔍 Case Study Knowledge Engine",
+# --- Main Studio Tabs ---
+tab_finder, tab_bookmarks, tab_daily, tab_trigger = st.tabs([
+    "🔍 Case Study Research Engine",
+    f"⭐ Saved Shortlist ({bookmarked_count})",
     "📰 Daily Intelligence Briefs",
     "⚡ Ingest & Sync Pipeline"
 ])
 
 
 # =====================================================================
-# TAB 1: Future Project Case Study Finder
+# TAB 1: Future Project Case Study Finder & Dossier Synthesizer
 # =====================================================================
 with tab_finder:
-    st.header("Future Project Case Study Finder")
+    st.header("Future Project Case Study & Material Precedent Finder")
     st.markdown(
         "Search your verified precedent database using natural language design requirements, "
-        "material specifications, climate conditions, or typology."
+        "regional climate conditions, structural systems, or material palettes."
     )
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        query = st.text_input(
-            "Design Requirements / Case Study Query:",
-            value="Hospitality project in a humid coastal climate using sustainable timber and perforated brick",
-            placeholder="e.g. Cultural center in a desert climate featuring rammed earth and passive solar shading"
-        )
-    with col2:
-        top_k = st.slider("Results to Retrieve", min_value=1, max_value=15, value=5)
+    query = st.text_input(
+        "Enter Project Design Brief / Requirements:",
+        value="Luxury eco-resort in coastal Maharashtra using laterite stone, lime plaster, and passive cooling",
+        placeholder="e.g. Cultural center in a desert climate featuring rammed earth and passive solar shading"
+    )
 
-    col_filter1, col_filter2 = st.columns(2)
-    with col_filter1:
-        cat_filter = st.selectbox(
-            "Filter by Category",
-            ["ALL", "ARCHITECTURAL_NEWS", "INTERIOR_NEWS", "MATERIAL_LAUNCH_NEWS"]
+    col_f1, col_f2, col_f3 = st.columns([2, 1.5, 1])
+    with col_f1:
+        categories_selected = st.multiselect(
+            "Filter Categories",
+            options=["ARCHITECTURAL_NEWS", "INTERIOR_NEWS", "MATERIAL_LAUNCH_NEWS"],
+            default=["ARCHITECTURAL_NEWS", "INTERIOR_NEWS", "MATERIAL_LAUNCH_NEWS"]
         )
-    with col_filter2:
-        typology_input = st.text_input(
-            "Filter by Typology (optional)",
+    with col_f2:
+        typology_filter = st.text_input(
+            "Typology Filter (optional)",
             value="",
-            placeholder="e.g. Hospitality, Residential, Cultural, Pavilions"
+            placeholder="e.g. Hospitality, Residential, Civic, Cultural"
         )
+    with col_f3:
+        min_relevance = st.slider("Min. Relevance %", min_value=0, max_value=90, value=30, step=5)
 
-    if st.button("Search Case Studies", type="primary", use_container_width=True):
-        with st.spinner("Embedding query & searching semantic index..."):
-            typ_filter = typology_input.strip() if typology_input.strip() else None
-            results = db.search_case_studies(
+    col_btn_search, col_btn_dossier = st.columns([1, 1])
+    with col_btn_search:
+        search_clicked = st.button("🔍 Search Precedents", type="primary", use_container_width=True)
+
+    # State management for search results
+    if search_clicked or "last_search_results" not in st.session_state:
+        with st.spinner("Querying vector index & calculating semantic proximity..."):
+            cat_param = categories_selected[0] if len(categories_selected) == 1 else None
+            raw_results = db.search_case_studies(
                 query=query,
-                n_results=top_k,
-                category=cat_filter,
-                typology=typ_filter
+                n_results=12,
+                category=cat_param,
+                typology=typology_filter.strip() if typology_filter.strip() else None
             )
+            # Filter by multi-select and min_relevance
+            filtered_results = [
+                r for r in raw_results
+                if (r["category"] in categories_selected) and (r["similarity_score"] * 100 >= min_relevance)
+            ]
+            st.session_state["last_search_results"] = filtered_results
+            st.session_state["last_search_query"] = query
 
-        if not results:
-            st.info("No matching case studies found in the local database. Try running the Ingestion pipeline on Tab 3 to populate your knowledge base.")
-        else:
-            st.markdown(f"### Found {len(results)} Verified Precedents")
-            for item in results:
-                with st.container():
-                    st.markdown("---")
-                    col_header1, col_header2 = st.columns([4, 1])
-                    with col_header1:
-                        st.subheader(f"[{item['title']}]({item['url']})")
-                    with col_header2:
-                        st.markdown(f"**Match:** `{item['similarity_score'] * 100:.1f}%`")
+    results = st.session_state.get("last_search_results", [])
+    current_query = st.session_state.get("last_search_query", query)
 
-                    # Badges
-                    badge_class = "badge-arch"
-                    if item['category'] == "INTERIOR_NEWS":
-                        badge_class = "badge-interior"
-                    elif item['category'] == "MATERIAL_LAUNCH_NEWS":
-                        badge_class = "badge-material"
+    # --- Precedent Results View ---
+    if not results:
+        st.info("No precedents matched your query and filter criteria. Try adjusting the minimum relevance slider or search terms.")
+    else:
+        st.markdown(f"### Found {len(results)} Verified Architectural Precedents")
 
-                    st.markdown(
-                        f"<span class='{badge_class}'>{item['category']}</span> "
-                        f"**Source:** {item['source_name']} | **Studio / Brand:** {item['architect_or_manufacturer']} | "
-                        f"**Typology:** {item['project_typology']} | **Location:** {item['climate_or_location']}",
-                        unsafe_allow_html=True
+        # Dossier Synthesis Banner
+        with st.container():
+            st.markdown("""
+            <div class='dossier-box'>
+                <h4 style='margin-top:0; color:#93c5fd;'>📄 Client-Ready Case Study & Material Precedent Dossier</h4>
+                <p style='color:#e2e8f0; font-size:0.9rem;'>
+                    Synthesize an executive architectural report with comparative matrix, material palette recommendations, 
+                    and strict citations exported directly into <b>Microsoft Word (.docx)</b> and Markdown.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if st.button("⚡ Generate Word (.docx) Case Study Dossier", type="secondary", use_container_width=True):
+                with st.spinner("Synthesizing comparative matrix and formatting Word document via Gemini..."):
+                    dossier_res = dossier_gen.generate_dossier(
+                        project_brief=current_query,
+                        top_k=min(len(results), 6)
+                    )
+                    if dossier_res["success"]:
+                        st.session_state["active_dossier"] = dossier_res
+                        st.success(f"Dossier generated: `{dossier_res['docx_filename']}`")
+
+        # Display download buttons if dossier is ready
+        if "active_dossier" in st.session_state:
+            active_d = st.session_state["active_dossier"]
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                with open(active_d["docx_path"], "rb") as f:
+                    st.download_button(
+                        label="📥 Download Word Document (.docx)",
+                        data=f.read(),
+                        file_name=active_d["docx_filename"],
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True
+                    )
+            with col_d2:
+                with open(active_d["md_path"], "r", encoding="utf-8") as f:
+                    st.download_button(
+                        label="📄 Download Markdown Report (.md)",
+                        data=f.read(),
+                        file_name=active_d["md_filename"],
+                        mime="text/markdown",
+                        use_container_width=True
                     )
 
-                    # Materials
-                    materials = item.get("materials_used", "")
-                    if materials:
-                        pills = "".join(f"<span class='material-pill'>{m.strip()}</span>" for m in materials.split(",") if m.strip())
-                        st.markdown(f"<div style='margin: 8px 0;'><strong>Materials:</strong> {pills}</div>", unsafe_allow_html=True)
+            with st.expander("👁️ Preview Synthesized Dossier Text", expanded=False):
+                st.markdown(active_d["synthesis_markdown"])
 
-                    # 3 Bullet Takeaways
-                    st.markdown("**Executive Takeaways:**")
-                    if item.get("bullet_1"):
-                        st.markdown(f"- {item['bullet_1']}")
-                    if item.get("bullet_2"):
-                        st.markdown(f"- {item['bullet_2']}")
-                    if item.get("bullet_3"):
-                        st.markdown(f"- {item['bullet_3']}")
+        st.markdown("---")
+
+        # Render Individual Result Cards
+        for idx, item in enumerate(results):
+            with st.container():
+                col_header1, col_header2 = st.columns([5, 1])
+                with col_header1:
+                    st.markdown(f"#### [{item['title']}]({item['url']})")
+                with col_header2:
+                    st.markdown(f"**Match:** `{item['similarity_score'] * 100:.1f}%`")
+                    # Bookmark Star Button
+                    is_saved = bool(item.get("is_bookmarked", 0))
+                    btn_label = "★ Saved" if is_saved else "☆ Shortlist"
+                    if st.button(btn_label, key=f"bm_{item['id']}_{idx}"):
+                        new_state = db.toggle_bookmark(item['id'])
+                        item["is_bookmarked"] = int(new_state)
+                        st.rerun()
+
+                # Badges
+                badge_class = "badge-arch"
+                if item['category'] == "INTERIOR_NEWS":
+                    badge_class = "badge-interior"
+                elif item['category'] == "MATERIAL_LAUNCH_NEWS":
+                    badge_class = "badge-material"
+
+                st.markdown(
+                    f"<span class='{badge_class}'>{item['category']}</span> "
+                    f"**Source:** {item['source_name']} | **Lead Studio / Brand:** {item['architect_or_manufacturer']} | "
+                    f"**Typology:** {item['project_typology']} | **Location / Climate:** {item['climate_or_location']}",
+                    unsafe_allow_html=True
+                )
+
+                # Materials
+                materials = item.get("materials_used", "")
+                if materials and materials != "N/A":
+                    pills = "".join(f"<span class='material-pill'>{m.strip()}</span>" for m in materials.split(",") if m.strip())
+                    st.markdown(f"<div style='margin: 8px 0;'><strong>Materials:</strong> {pills}</div>", unsafe_allow_html=True)
+
+                # 3-Bullet Summary
+                st.markdown("**Executive Takeaways:**")
+                if item.get("bullet_1"):
+                    st.markdown(f"- {item['bullet_1']}")
+                if item.get("bullet_2"):
+                    st.markdown(f"- {item['bullet_2']}")
+                if item.get("bullet_3"):
+                    st.markdown(f"- {item['bullet_3']}")
+
+                st.markdown("---")
 
 
 # =====================================================================
-# TAB 2: Daily Intelligence Briefs
+# TAB 2: Saved Shortlist & Bookmarks
+# =====================================================================
+with tab_bookmarks:
+    st.header(f"⭐ Saved Project Shortlist ({bookmarked_count})")
+    st.markdown("Your persistent library of bookmarked architectural precedents, interior spaces, and material launches.")
+
+    saved_items = db.get_bookmarked()
+
+    if not saved_items:
+        st.info("No case studies bookmarked yet. Click '☆ Shortlist' on any precedent in the Research Engine to pin it here.")
+    else:
+        col_bm_actions1, col_bm_actions2 = st.columns([3, 1])
+        with col_bm_actions1:
+            st.markdown(f"**{len(saved_items)}** precedents ready for project specification.")
+        with col_bm_actions2:
+            if st.button("⚡ Export Shortlist to Word (.docx)", use_container_width=True):
+                with st.spinner("Generating shortlist dossier..."):
+                    dossier_res = dossier_gen.generate_dossier(
+                        project_brief="Curated Project Precedent Shortlist",
+                        top_k=len(saved_items)
+                    )
+                    st.session_state["shortlist_dossier"] = dossier_res
+                    st.rerun()
+
+        if "shortlist_dossier" in st.session_state:
+            sld = st.session_state["shortlist_dossier"]
+            with open(sld["docx_path"], "rb") as f:
+                st.download_button(
+                    label="📥 Download Shortlist Dossier (.docx)",
+                    data=f.read(),
+                    file_name=sld["docx_filename"],
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+
+        st.markdown("---")
+        for s_idx, s_item in enumerate(saved_items):
+            with st.container():
+                col_s1, col_s2 = st.columns([5, 1])
+                with col_s1:
+                    st.markdown(f"#### [{s_item['title']}]({s_item['url']})")
+                with col_s2:
+                    if st.button("❌ Remove", key=f"del_bm_{s_item['id']}_{s_idx}"):
+                        db.toggle_bookmark(s_item["id"])
+                        st.rerun()
+
+                st.markdown(
+                    f"**Category:** `{s_item['category']}` | **Studio:** {s_item['architect_or_manufacturer']} | "
+                    f"**Typology:** {s_item['project_typology']} | **Location:** {s_item['climate_or_location']}"
+                )
+
+                if s_item.get("materials_used"):
+                    st.markdown(f"**Materials:** `{s_item['materials_used']}`")
+
+                if s_item.get("bullet_1"):
+                    st.markdown(f"- {s_item['bullet_1']}")
+                st.markdown("---")
+
+
+# =====================================================================
+# TAB 3: Daily Intelligence Briefs
 # =====================================================================
 with tab_daily:
     st.header("Daily Architectural Intelligence Reports")
@@ -241,28 +403,29 @@ with tab_daily:
 
 
 # =====================================================================
-# TAB 3: Ingest & Sync Pipeline
+# TAB 4: Ingest & Sync Pipeline
 # =====================================================================
 with tab_trigger:
     st.header("Trigger Pipeline Execution")
     st.markdown(
-        "Run the automated ingestion pipeline directly from the dashboard. "
-        "Fetches the latest articles from whitelisted feeds, executes AI triage, updates ChromaDB, and builds today's report."
+        "Run the automated ingestion pipeline directly from the workstation. "
+        "Fetches the latest articles from whitelisted feeds (including Indian & global publications), "
+        "executes AI triage with `gemini-3.8-flash`, updates SQLite vector store, and builds today's report."
     )
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        items_per_source = st.number_input("Max articles per feed", min_value=1, max_value=10, value=2)
+        items_per_source = st.number_input("Max articles per feed", min_value=1, max_value=10, value=3)
     with col_btn2:
-        skip_chroma = st.checkbox("Skip ChromaDB vector indexing", value=False)
+        skip_chroma = st.checkbox("Skip vector indexing", value=False)
 
-    if st.button("🚀 Run Pipeline Now", type="primary"):
+    if st.button("🚀 Run Live Pipeline Now", type="primary"):
         with st.status("Executing Daily Pipeline...", expanded=True) as status:
             st.write("Fetching articles through Domain Guard...")
             articles = ingestor.ingest_all(max_items_per_source=items_per_source)
             st.write(f"Ingested {len(articles)} candidate articles from trusted sources.")
 
-            st.write("Executing AI triage & structured extraction...")
+            st.write("Executing AI triage & structured extraction with Gemini 3.8 Flash...")
             triage_engine = AITriageEngine()
             triaged_items = []
             for art in articles:
@@ -271,10 +434,10 @@ with tab_trigger:
             st.write(f"Triage complete for {len(triaged_items)} articles.")
 
             if not skip_chroma:
-                st.write("Indexing into ChromaDB Case Study Knowledge Base...")
+                st.write("Indexing into SQLite 3072-d Vector Knowledge Base...")
                 for it in triaged_items:
                     db.index_article(it["article"], it["analysis"])
-                st.write(f"Updated ChromaDB. Total items in DB: {db.get_total_count()}")
+                st.write(f"Updated SQLite vector store. Total items in DB: {db.get_total_count()}")
 
             st.write("Generating Daily Digest Markdown Brief...")
             builder = DailyDigestBuilder()

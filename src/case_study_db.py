@@ -84,11 +84,19 @@ class CaseStudyDatabase:
                     bullet_2 TEXT,
                     bullet_3 TEXT,
                     document_text TEXT,
-                    embedding TEXT
+                    embedding TEXT,
+                    is_bookmarked INTEGER DEFAULT 0
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_category ON case_studies(category)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_typology ON case_studies(project_typology)")
+            
+            # Safe column migration for existing tables
+            try:
+                conn.execute("ALTER TABLE case_studies ADD COLUMN is_bookmarked INTEGER DEFAULT 0")
+            except Exception:
+                pass  # Column already exists
+                
             conn.commit()
 
     def _get_embedding(self, text: str) -> List[float]:
@@ -229,7 +237,7 @@ CONTENT:
         sql = f"""
             SELECT id, url, title, source_name, publish_date, category,
                    architect_or_manufacturer, project_typology, climate_or_location,
-                   materials_used, bullet_1, bullet_2, bullet_3, embedding
+                   materials_used, bullet_1, bullet_2, bullet_3, embedding, is_bookmarked
             FROM case_studies
             {where_clause}
         """
@@ -260,6 +268,35 @@ CONTENT:
         # Sort descending by similarity score
         scored_results.sort(key=lambda x: x["similarity_score"], reverse=True)
         return scored_results[:n_results]
+
+    def toggle_bookmark(self, doc_id: str) -> bool:
+        """
+        Toggles the bookmark status (1 or 0) for a case study.
+        Returns the new bookmarked state.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT is_bookmarked FROM case_studies WHERE id = ?", (doc_id,)).fetchone()
+            if not row:
+                return False
+            current = row[0] or 0
+            new_val = 0 if current else 1
+            conn.execute("UPDATE case_studies SET is_bookmarked = ? WHERE id = ?", (new_val, doc_id))
+            conn.commit()
+            return bool(new_val)
+
+    def get_bookmarked(self) -> List[Dict[str, Any]]:
+        """Returns all shortlisted/bookmarked case studies."""
+        sql = """
+            SELECT id, url, title, source_name, publish_date, category,
+                   architect_or_manufacturer, project_typology, climate_or_location,
+                   materials_used, bullet_1, bullet_2, bullet_3, is_bookmarked
+            FROM case_studies
+            WHERE is_bookmarked = 1
+            ORDER BY rowid DESC
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(sql).fetchall()
+            return [dict(r) for r in rows]
 
     def get_total_count(self) -> int:
         """Returns total number of indexed case studies."""
